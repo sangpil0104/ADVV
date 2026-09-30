@@ -1,0 +1,12 @@
+{
+  "dragflow_commit": "b3a8fa7136df5131d07f98425c0d189fb6ca74b0",
+  "fireflow_commit": "20ab81fb084c06a089bb8cf86726a28036c88d5b",
+  "models": {
+    "Qwen/Qwen3.5-4B": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+    "black-forest-labs/FLUX.1-dev": "3de623fc3c33e44ffbe2bad470d0f45bccf2eb21",
+    "Tencent/InstantCharacter": "96c610b9c87ff7379c3784fe1ff566feec39e352",
+    "google/siglip-so400m-patch14-384": "9fdffc58afc957d1a03a25b10dba0329ab15c2a3",
+    "facebook/dinov2-giant": "611a9d42f2335e0f921f1e313ad3c1b7178d206d",
+    "openai/clip-vit-large-patch14": "32bd64288804d66eefd0ccbe215aa642df71cc41"
+  }
+}

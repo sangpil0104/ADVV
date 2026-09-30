@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv*/
+build/
+dist/
+runs/
+data/
+models/
+third_party/
+configs/advv.local.yaml
+*.log
+
+# Local inputs, verification outputs and presentation artifacts
+assets/*
+!assets/.gitkeep
+integration_checks/
+presentation/
+*.pptx
+*.pdf
+
+# Machine-specific settings and credentials
+configs/*.local.yaml
+.env
+.env.*
+!.env.example
+.cache/
+.tools/
+*.pem
+*.key
+.DS_Store

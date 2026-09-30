@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ADVV VQA response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["answer", "reason"],
+  "properties": {
+    "answer": {
+      "type": "string",
+      "enum": ["YES", "NO", "UNCERTAIN"]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "\\S"
+    }
+  }
+}

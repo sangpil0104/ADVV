@@ -1,0 +1,138 @@
+# ADVV MVP 설정 예시. advv prepare가 로컬 모델 경로를 채운 advv.local.yaml을 만든다.
+# YAML 상대 경로는 이 파일 위치 기준. 필수 null은 실행 시 채운다.
+schema_version: "1.1"
+project: ADVV
+
+run:
+  seed: 42
+  output_root: ../runs
+  strategy: random_until_quota
+  target_count: null                  # 필수: 전체 입력에서 새 이미지 총 N장
+  quota_scope: total
+  limit_policy: until_target_or_user_stop
+  max_attempts: null                   # 사용자 확정: 총 시도 제한 없음
+  max_wall_time_seconds: null          # 사용자 확정: 총 시간 제한 없음
+  source_schedule: round_robin
+  chain_augmentation: false
+
+dataset:
+  mode: dataset_building
+  root: ../data
+  input_dir: null                      # 실행 시 사용자 폴더; manifest와 택일
+  manifest: ../examples/source_manifest.jsonl
+  task: image_only
+  eligible_splits: [source, train]
+  enforce_group_disjoint: true
+  enforce_cross_split_hash_disjoint: true
+
+source_profile:
+  mode: auto_with_optional_hint
+  prompt_path: ../prompts/source_profile_v2.txt
+  response_schema: ../schemas/source_profile.schema.json
+  freeze_before_generation: true
+  uncertain_action: hold_source
+  max_new_tokens: 512
+
+sampler:
+  version: random_geometry_v1
+  mask_shapes: [ellipse, rectangle]
+  region_area_fraction: [0.05, 0.40]    # 미검증 초기값; 영역 면적 / 이미지 면적
+  operations: [relocation, deformation, rotation]
+  operation_distribution: uniform
+  displacement_diagonal_fraction: [0.02, 0.20]
+  rotation_degrees: [-30.0, 30.0]
+  # 공식 deformation은 별도 scale 인자가 없으며 위 displacement 범위를 사용한다.
+  replay_plan: null                    # 선택: 저장한 계획의 디버깅·재현용
+
+execution:
+  mode: shared_gpus_sequential
+  selected_gpu_ids: null               # 필수: 사용자가 실행 시 선택
+  generator_python: null
+  verifier_python: null
+  candidate_concurrency: 1
+  worker_timeout_seconds: 1800         # 개별 작업 timeout 예시; 총 실행 상한 아님
+  max_technical_retries: 1
+  max_consecutive_technical_failures: 3  # 정상 NO/UNCERTAIN은 해당하지 않는 기술 장애 중단 기준
+  retry_oom: false
+
+generator:
+  backend: dragflow
+  repo_path: ../third_party/DragFlow
+  revision: null
+  upstream_config: null
+  weights_lock: null                   # FLUX/adapter/encoder의 모든 revision
+  parameters: {}
+
+verifier:
+  backend: qwen_multimodal_local
+  model_id: Qwen/Qwen3.5-4B
+  model_path: null                     # 다운로드한 로컬 모델 디렉터리
+  model_revision: null
+  processor_revision: null
+  local_files_only: true
+  fine_tune: false
+  dtype: bfloat16
+  batch_size: 1
+  enable_thinking: false
+  do_sample: false
+  max_new_tokens: 256                  # 각 VQA 호출 기준
+  physical_prompt_path: ../prompts/physical_plausibility_v1.txt
+  semantic_prompt_path: ../prompts/semantic_preservation_v1.txt
+  response_schema: ../schemas/vqa_response.schema.json
+  check_order: [physical, semantic]
+  semantic_only_after_physical_yes: true
+  preprocessing:
+    policy: pinned_processor_defaults
+  quantization: null
+
+decision:
+  require_all_yes: [physical, semantic]
+  accept_answer: "YES"
+  reject_answer: "NO"
+  uncertain_answer: "UNCERTAIN"
+  retry_semantic_decisions: false       # 탈락한 동일 후보를 재질문하지 않음
+
+storage:
+  delete_rejected_images: true         # 독립 시각 검수 실험만 사전에 false 선택
+  keep_uncertain_images: true
+  keep_error_images: true
+  persist_raw_vqa: true
+  atomic_writes: true
+
+export:
+  format: jsonl
+  allowed_status: accepted
+  require_valid_labels: false          # MVP image-only
+  reject_fake_backend: true
+  deduplicate_exact_pixels: true
+  deduplicate_against_source: true
+  near_duplicate_filter: false
+
+visualization:
+  enabled: true
+  output_subdir: visualizations        # 각 run 디렉터리 안
+  format: png
+  layout: source_overlay_and_generated
+  save_drag_plan: true
+  save_comparison: true
+  save_metadata: true
+  max_panel_side_px: 1024              # 미리보기만 축소, 종횡비 유지
+  area_color: "#2196F3"
+  area_alpha: 0.25
+  draw_area_outline: true
+  start_color: "#E53935"
+  start_marker: circle
+  end_color: "#43A047"
+  end_marker: cross
+  arrow_color: "#FFD600"
+  show_anchor: true
+  anchor_color: "#AB47BC"
+  show_coordinates: true
+  show_area_stats: true
+  show_vqa_results: true
+  rejected_comparison_policy: follow_image_retention
+
+report:
+  terminal_progress: true
+  record_stage_times: true
+  record_peak_vram: true

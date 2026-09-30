@@ -1,0 +1,22 @@
+# Isolated from Qwen; upstream b3a8fa7136df5131d07f98425c0d189fb6ca74b0.
+torch==2.5.1
+torchvision==0.20.1
+transformers==4.48.0
+diffusers==0.32.2
+accelerate==1.2.1
+optimum-quanto==0.2.6
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+einops==0.8.0
+safetensors==0.5.2
+scipy==1.15.1
+scikit-learn==1.6.1
+matplotlib==3.10.0
+sentencepiece==0.2.0
+protobuf>=3.20,<6
+huggingface-hub==0.28.1
+Pillow>=10
+PyYAML>=6
+jsonschema>=4.18
+tqdm>=4.66
+timm==1.0.14
