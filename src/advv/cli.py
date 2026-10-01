@@ -9,9 +9,10 @@ from pathlib import Path
 from .backends.process import LocalBackend
 from .config import load_config, parse_gpus
 from .errors import ADVVError
+from .human_review import review_run
 from .pipeline import Pipeline, create_run
 from .preflight import preflight
-from .prepare import prepare
+from .prepare import ONLY, prepare
 from .reporting import export_run, report_run
 from .storage import read_json
 
@@ -54,13 +55,21 @@ def main(argv=None):
                 metavar="N",
                 help="Total accepted images to collect across all inputs (e.g. advv run 10)",
             )
+            p.add_argument(
+                "--human-review",
+                action=argparse.BooleanOptionalAction,
+                default=None,
+                help="Add the final human pass/fail stage (advv review); default comes from the config",
+            )
             p.add_argument("--run-id")
             p.add_argument("--run-dir", type=Path)
             p.add_argument("--resume", action="store_true")
     p = sub.add_parser("prepare", help="Download the pinned models; inference remains offline")
     p.add_argument("--project", type=Path, default=Path.cwd())
-    p.add_argument("--only", choices=["all", "qwen", "dragflow", "support"], default="all")
-    for name in ("export", "report"):
+    p.add_argument(
+        "--only", choices=ONLY, default="all", help="all = DragFlow + Qwen; sam3 (gated) only on request"
+    )
+    for name in ("export", "report", "review"):
         p = sub.add_parser(name)
         p.add_argument("--run-dir", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -71,10 +80,24 @@ def main(argv=None):
             args.target_count = args.count
         if args.resume and args.target_count is not None:
             parser.error("Resume uses the saved target count; omit N and --target-count")
+        if args.resume and args.human_review is not None:
+            parser.error("Human review is fixed when a run is created; start a new run to change it")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         if args.command == "prepare":
             prepare(args.project, only=args.only)
+            return 0
+        if args.command == "review":
+            from .storage import run_lock
+
+            root = args.run_dir.resolve()
+            with run_lock(root):
+                try:
+                    review_run(root)
+                except KeyboardInterrupt:
+                    print("\nReview paused; run the same command to continue.")
+                print(export_run(root))
+                print(report_run(root))
             return 0
         if args.command in ("report", "export"):
             from .storage import run_lock
@@ -92,7 +115,11 @@ def main(argv=None):
             preflight(cfg, check_inputs=False)
         else:
             cfg = load_config(
-                args.config, input_dir=args.input_dir, target_count=args.target_count, gpus=args.gpus
+                args.config,
+                input_dir=args.input_dir,
+                target_count=args.target_count,
+                gpus=args.gpus,
+                human_review=getattr(args, "human_review", None),
             )
             checks = preflight(cfg)
             if args.command == "preflight":
@@ -120,6 +147,8 @@ def main(argv=None):
                 indent=2,
             )
         )
+        if state["status"] == "completed" and cfg.get("human_review", {}).get("enabled"):
+            print(f"Next: advv review --run-dir {root}")
         return 0 if state["status"] == "completed" else 130 if state["status"] == "interrupted" else 1
     except (ADVVError, OSError, ValueError, KeyError) as exc:
         logging.error("%s: %s", type(exc).__name__, exc)

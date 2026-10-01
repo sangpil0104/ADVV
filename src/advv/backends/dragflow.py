@@ -40,7 +40,8 @@ def upstream_instruction(plan: dict) -> dict:
                     "deformation": "deformation",
                     "rotation": "rotation",
                 }[plan["operation"]],
-                "centroids": [plan["source_point"], plan["target_point"]],
+                # centroids[0] only selects the contour; upstream then drags from the region centroid.
+                "centroids": [plan.get("region_select_point") or plan["source_point"], plan["target_point"]],
                 "anchors": plan.get("anchor_point"),
             }
         },

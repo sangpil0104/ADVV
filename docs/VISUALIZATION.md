@@ -41,6 +41,8 @@ Semantic: YES·NO·UNCERTAIN·PENDING·ERROR·NOT_RUN / final status
 
 `metadata.json`에 최소한 source/candidate/plan ID와 hash, 정규화 원본 크기, backend 입력 크기, 요청 좌표·mask hash, 실제 전달 좌표·mask hash, 전처리/역변환, 표시 좌표, 면적과 계산 좌표계, seed, operation, 두 VQA 상태, 렌더링 버전·설정 hash·파일 경로를 남긴다. 요청값과 실제값이 다르면 그 사실과 두 값을 footer 또는 보조 설명에 함께 표시한다.
 
+`object_region_v2` 계획은 footer에 `region=<entity|part> | phrase=<명사구> | proposal=<ID>` 줄과 `S = mask centroid, the start DragFlow drags from | contour select=(x, y)` 줄을 추가한다. 값은 저장된 계획의 `region_*` 필드이며 metadata의 `requested`에도 그대로 남는다. S 표시는 두 sampler 모두 `source_point`, 즉 upstream이 실제로 드래그를 시작하는 mask centroid다. 오목한 mask에서는 S가 파란 영역 밖에 찍힐 수 있으며, 윤곽 선택용 점은 footer에만 적는다. v1 계획에는 두 줄이 없다.
+
 `area`는 선택한 편집 영역을 뜻한다. upstream이 별도로 확장한 gradient mask나 추정한 target region이 있으면 이름과 범례를 구분한다. 선택 영역이 생성 중 변화한 모든 픽셀과 정확히 같다고 표시하지 않는다. 실제 전달값을 확보하지 못했다면 요청값으로 그린 그림에는 `REQUESTED / NOT EXECUTED`를 표시하고 실행 설정 검증을 완료했다고 보고하지 않는다.
 
 ## 3. 저장 위치와 시점

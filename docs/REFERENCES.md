@@ -23,6 +23,37 @@
 
 추가 fine-tuning 없이 checkpoint로 VQA를 시작하는 것은 ADVV의 초기 설계 선택이다. 그것만으로 산업 결함 판정이나 희귀 생물 식별의 정확도가 입증되는 것은 아니다. Qwen3.5 지원 버전을 실제 검증하기 전 예전 Qwen3-VL용 환경 하한을 재사용하지 않는다.
 
+## 영역 proposal 모델 (sampler v2 후보)
+
+확인일: **2026-09-30**. [sampler v2 설계](REGION_SAMPLER.md)에서 사용한다. 기본은 SAM 3이고 Grounding DINO + SAM 2.1은 비교용이다(2026-09-30 사용자 결정). 아래 commit·revision은 확인 시점의 값이다. SAM 3는 `configs/upstream.lock.json`의 `region_proposal.sam3`에 고정했다(아래 "SAM 3 고정과 설치"). 비교용 모델은 worker를 구현할 때 고정한다.
+
+| 모델 | 공식 자료 | 확인 시점 commit / revision | 라이선스·접근 | 요구 환경 |
+| --- | --- | --- | --- | --- |
+| SAM 2.1 (비교용) | [facebookresearch/sam2](https://github.com/facebookresearch/sam2), [facebook/sam2.1-hiera-large](https://huggingface.co/facebook/sam2.1-hiera-large) | `2b90b9f5ceec907a1c18123530e92e794ad901a4` / `665f8e2ad61cf5f53d65644ff27c8ee525124610` | Apache-2.0, 승인 불필요 | Python ≥3.10, torch ≥2.5.1 |
+| Grounding DINO (비교용) | [IDEA-Research/GroundingDINO](https://github.com/IDEA-Research/GroundingDINO), [IDEA-Research/grounding-dino-base](https://huggingface.co/IDEA-Research/grounding-dino-base) | `856dde20aee659246248e20734ef9ba5214f5e44` / `12bdfa3120f3e7ec7b434d90674b3396eccf88eb` | Apache-2.0, 승인 불필요 | Transformers 포트는 4.48에 포함 |
+| SAM 3 (기본) | [facebookresearch/sam3](https://github.com/facebookresearch/sam3), [facebook/sam3](https://huggingface.co/facebook/sam3), [논문](https://arxiv.org/abs/2511.16719) | `2345a4ad109ac29c569da749c91d84f10dc08c40` / `3c879f39826c281e95690f02c7821c4de09afae7` | 자체 SAM License, HF 수동 승인 | Python ≥3.12, torch ≥2.7, CUDA ≥12.6 |
+| Grounded-SAM-2 (참고) | [IDEA-Research/Grounded-SAM-2](https://github.com/IDEA-Research/Grounded-SAM-2) | `b7a9c29f196edff0eb54dbe14588d7ae5e3dde28` | Apache-2.0 / BSD-3 | 조합 예제 참고용. SAM 3 미통합 |
+
+- SAM 2.1은 point prompt 하나에 점수가 매겨진 mask 3개를 반환한다(`multimask_output`). 텍스트 prompt는 지원하지 않는다.
+- Grounding DINO는 box만 반환한다. 텍스트는 소문자·마침표 구분 명사구이며 `box_threshold`·`text_threshold` 조정이 필요하다.
+- SAM 3는 텍스트 → 인스턴스 mask와 point → 3단계 mask를 모두 지원한다. 논문은 학습 분야 밖의 세밀한 개념(의료·열화상 등)에 약하다고 밝히며, 산업 결함으로는 평가되지 않았다. 후속 SAM 3.1(2026-03-27)은 동영상 다중 객체 추적 개선이다.
+- SAM 3 공식 API(commit `2345a4a`): `build_sam3_image_model(..., checkpoint_path, load_from_HF=False, enable_inst_interactivity=True)`, `Sam3Processor.set_image` → `set_text_prompt`(점수 = sigmoid(logit)×presence, `confidence_threshold`보다 큰 것만 반환, 기본 0.5), `model.predict_inst(state, point_coords, point_labels, multimask_output=True)` → 원본 해상도 mask 3개·예측 IoU(정렬 안 됨)·low-res logits (3, 288, 288)(T009c 실측, T008 문서의 256은 정정). 전처리는 1008×1008 종횡비 무시 resize.
+- SAM 3 논문(arXiv:2511.16719) Appendix B는 학습 분야 밖의 세밀한 개념에 약하다고 밝히고, Roboflow100-VL zero-shot AP는 Industrial 9.0이다. 그래서 결함 자체가 아니라 결함을 가진 객체의 명사구로 grounding한다.
+- Qwen3.5-4B 모델 카드는 RefCOCO 88.1을 보고하지만 box 출력 형식은 문서화하지 않았다. Qwen3-VL의 상대 좌표(0–1000) 형식을 이어받는다고 가정하지 않고 실측한다.
+
+### SAM 3 고정과 설치 (2026-09-30)
+
+| 항목 | 값 |
+| --- | --- |
+| 코드 | `facebookresearch/sam3` `2345a4ad109ac29c569da749c91d84f10dc08c40` → `third_party/sam3`(editable 설치, 수정 금지) |
+| 가중치 | `facebook/sam3` `3c879f39826c281e95690f02c7821c4de09afae7`의 `sam3.pt`(3,450,062,241 B), `config.json`, `LICENSE`. 크기·SHA256은 `configs/upstream.lock.json`, 로컬 경로는 `models/weights.lock.json` |
+| 사용하지 않음 | `model.safetensors`(Transformers 포트용), `facebook/sam3.1`(동영상 multiplex) |
+| 환경 | `.venv-sam3`: Python 3.12, torch 2.10.0+cu128, `numpy<2`, `setuptools<82`, 추가 `einops`·`pycocotools`·`psutil`(sam3가 선언하지 않고 import). `environments/sam3-requirements.txt`, `environments/sam3.freeze.txt` |
+| GPU 실측(T009c, 스모크 스크립트) | 드라이버 535.288.01에서 cu128 동작, missing key 0, 로드 8.4 s, RTX A6000 960px 이미지 피크 약 6.2 GiB, 텍스트 호출 뒤 같은 state의 점 호출 결과 동일 |
+| 라이선스 | 자체 SAM License(2025-11-19). 재배포 시 사본 동봉(1.b.i), 논문 사용 표기(1.b.ii), 금지 용도(1.b.v). "research only"·"non-commercial" 문구는 없고 output의 소유·재배포를 직접 정한 조항도 없다. 저장소 pyproject classifier의 "MIT"와 충돌하며 효력 판단은 하지 않는다 |
+
+Transformers 포트는 5.10.1에서 SAM 3 텍스트 인코더 가중치가 로드되지 않는 회귀가 있었고(5.10.2 수정), 점 prompt에는 별도 `Sam3TrackerModel`이 필요해 공식 패키지를 택했다. ADVV adapter를 통한 GPU 실행은 `tests/test_sam3_integration.py`(`-m integration`)로 따로 확인한다.
+
 ## 확인된 사실과 ADVV의 설계 선택
 
 | 구분 | 내용 |
@@ -40,7 +71,7 @@
 
 ## 로컬 구현 기록 (2026-09-29)
 
-- `configs/upstream.lock.json`: DragFlow/FireFlow commit 및 모델별 revision.
+- `configs/upstream.lock.json`: DragFlow/FireFlow commit 및 모델별 revision. `region_proposal.sam3`에 SAM 3 코드 commit·HF revision·파일 SHA256(2026-09-30 추가).
 - `models/weights.lock.json`: FLUX.1-dev를 포함해 다운로드 완료한 로컬 snapshot. 서버 브라우저 인증 후 gated 모델 접근을 확인했다.
 - `environments/*.freeze.txt`: 설치한 coordinator/DragFlow/Qwen 환경.
 - `integration_checks/qwen_worker/results.json`: 실제 Qwen3.5-4B의 단일/두 이미지 추론, torch 2.6.0 / Transformers 5.17.0, 약 9.5 GB 이하의 관측 allocated VRAM. 다른 이미지 크기의 요구량을 보장하지 않는다.

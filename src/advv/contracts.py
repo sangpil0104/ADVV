@@ -41,7 +41,14 @@ class EditRequest:
     source_prompt: str
     target_prompt: str
     mask_sha256: str
-    schema_version: str = "1.1"
+    schema_version: str = "1.3"
+    # object_region_v2 only; random_geometry_v1 and schema 1.1/1.2 plans keep them null.
+    region_proposal_id: str | None = None
+    region_level: str | None = None
+    region_phrase: str | None = None
+    # v2: mask-interior point DragFlow uses only to pick the contour. The drag itself starts at
+    # source_point, the mask centroid, because upstream replaces the start with the region centroid.
+    region_select_point: list[int] | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -12,7 +12,7 @@ from .backends.dragflow import ALLOWED_PARAMETERS
 from .config import validate_config
 from .errors import ConfigError
 from .ingest import scan_sources
-from .prepare import git_revision, verify_weights
+from .prepare import git_revision, verify_sam3, verify_weights
 from .storage import digest, file_hash
 
 
@@ -115,6 +115,8 @@ def preflight(cfg: dict, *, check_inputs=True) -> dict:
             [interpreter, "-m", "pip", "freeze"], capture_output=True, text=True, check=True
         ).stdout
         environments[kind] = {"versions": result.stdout.strip(), "packages": packages}
+    if cfg["sampler"]["version"] == "object_region_v2":
+        environments["proposal"] = check_proposal(cfg, gpus)
     frozen = {
         "_upstream_config": upstream,
         "_upstream_config_sha256": file_hash(Path(upstream_path)),
@@ -131,3 +133,53 @@ def preflight(cfg: dict, *, check_inputs=True) -> dict:
     if check_inputs:
         _, result["inputs"] = scan_sources(cfg)
     return result
+
+
+PROPOSAL_PROBE = (
+    "import torch, sam3, advv; from sam3.model_builder import build_sam3_image_model; "
+    "from sam3.model.sam3_image_processor import Sam3Processor; "
+    "print(torch.__version__, torch.version.cuda, sam3.__file__)"
+)
+
+
+def check_proposal(cfg: dict, gpus: list[str]) -> dict:
+    """object_region_v2: pinned SAM 3 checkout, checkpoint and worker Python (probed on the first GPU)."""
+    settings = cfg["region_proposal"]
+    if settings["backend"] != "sam3":
+        raise ConfigError(f"region_proposal.backend {settings['backend']} is not implemented; use sam3")
+    verify_sam3(cfg)
+    repo = settings.get("repo_path")
+    if not repo or not Path(repo).is_dir():
+        raise ConfigError("Missing region_proposal.repo_path (official facebookresearch/sam3 checkout)")
+    repo = Path(repo)
+    if not settings.get("code_revision") or git_revision(repo) != settings["code_revision"]:
+        raise ConfigError("SAM 3 checkout does not match region_proposal.code_revision")
+    dirty = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    if dirty:
+        raise ConfigError("SAM 3 tracked files were modified; restore the pinned checkout")
+    interpreter = cfg["execution"].get("proposal_python")
+    if not interpreter or not Path(interpreter).is_file():
+        raise ConfigError("Missing proposal Python environment (execution.proposal_python, .venv-sam3)")
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpus[0], HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+    result = subprocess.run(
+        [interpreter, "-c", PROPOSAL_PROBE],
+        cwd=Path(interpreter).parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if result.returncode:
+        raise ConfigError(f"proposal import failed: {result.stderr[-3000:]}")
+    package = Path(result.stdout.split()[-1]).resolve()
+    if not package.is_relative_to(repo.resolve()):
+        raise ConfigError(f"proposal Python imports sam3 from {package}, not {repo}")
+    packages = subprocess.run(
+        [interpreter, "-m", "pip", "freeze"], capture_output=True, text=True, check=True
+    ).stdout
+    return {"versions": result.stdout.strip(), "packages": packages}

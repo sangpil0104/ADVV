@@ -10,14 +10,19 @@ import time
 from pathlib import Path
 
 from ..contracts import Generated, RawResponse
-from ..errors import BackendError, FatalBackendError
-from ..storage import read_json, within
+from ..errors import BackendError, ConfigError, FatalBackendError
+from ..proposals import read_raw
+from ..storage import read_json, safe_id, within
 
 
 class Worker:
     def __init__(self, kind: str, cfg: dict, run_dir: Path):
         selected = cfg["execution"]["selected_gpu_ids"]
+        # DragFlow uses two devices; Qwen and the proposal model use the first selected GPU.
         gpus = selected[:2] if kind == "generator" else selected[:1]
+        interpreter = cfg["execution"].get(kind + "_python")
+        if not interpreter:
+            raise ConfigError(f"execution.{kind}_python is not set")
         env = os.environ.copy()
         env.update(
             CUDA_VISIBLE_DEVICES=",".join(gpus),
@@ -32,7 +37,7 @@ class Worker:
         self.log = logfile.open("a", encoding="utf-8")
         self.proc = subprocess.Popen(
             [
-                cfg["execution"][kind + "_python"],
+                interpreter,
                 "-m",
                 "advv.backends.worker",
                 "--kind",
@@ -104,13 +109,18 @@ class LocalBackend:
 
     def __init__(self, cfg: dict, run_dir: Path):
         self.cfg, self.run_dir = cfg, run_dir
-        self.worker = None
+        self.worker, self.kind = None, None
+
+    def _worker(self, kind: str) -> Worker:
+        """One model process at a time on the shared GPUs: switching kinds closes the previous one."""
+        if self.kind != kind:
+            self.close()
+            self.worker, self.kind = Worker(kind, self.cfg, self.run_dir), kind
+        return self.worker
 
     def complete(self, images, prompt, max_new_tokens, *, receipt=None) -> RawResponse:
-        if self.worker is None:
-            self.worker = Worker("verifier", self.cfg, self.run_dir)
         try:
-            result = self.worker.request(
+            result = self._worker("verifier").request(
                 {
                     "action": "complete",
                     "images": [str(p) for p in images],
@@ -123,6 +133,32 @@ class LocalBackend:
             self.close()
             raise
         return RawResponse(result["text"], result["info"])
+
+    def propose(self, source, subjects, parts, run_dir) -> dict:
+        """Raw region proposals for one source (SAM 3 worker on the first selected GPU)."""
+        folder = f"proposals/{safe_id(source.source_id)}/receipt"
+        saved = within(run_dir, f"{folder}/response.json")
+        if saved.exists():
+            response = read_json(saved)
+            # A finished receipt is reused without the GPU when only proposals.json is missing.
+            result = response.get("result") or {}
+            asked = result.get("subjects"), result.get("parts")
+            if response["ok"] and asked == (list(subjects), list(parts)):
+                return read_raw(run_dir, folder)
+        request = {
+            "action": "propose",
+            "source": source.to_dict(),
+            "subjects": list(subjects),
+            "parts": list(parts),
+            "raw_dir": folder,
+            "receipt": f"{folder}/response.json",
+        }
+        try:
+            self._worker("proposal").request(request)
+        except BackendError:
+            self.close()
+            raise
+        return read_raw(run_dir, folder)
 
     def generate(self, source, plan, run_dir) -> Generated:
         self.close()  # Release Qwen before DragFlow occupies the selected GPUs.
@@ -145,4 +181,4 @@ class LocalBackend:
     def close(self):
         if self.worker:
             self.worker.close()
-            self.worker = None
+        self.worker, self.kind = None, None

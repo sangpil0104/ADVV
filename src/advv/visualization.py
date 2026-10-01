@@ -122,6 +122,14 @@ def render(run_dir: Path, source: dict, record: dict, settings: dict) -> dict:
         f"area={area} px ({area / (w * h):.2%}) | blue=selected area | arrow=intended movement",
         f"Physical: {_status(record, 'physical')} | Semantic: {_status(record, 'semantic')} | {record['status']}",
     ]
+    if plan.get("region_level"):
+        lines.append(
+            f"region={plan['region_level']} | phrase={plan['region_phrase']} | proposal={plan['region_proposal_id']}"
+        )
+    if plan.get("region_select_point"):
+        lines.append(
+            f"S = mask centroid, the start DragFlow drags from | contour select={point(plan['region_select_point'])}"
+        )
     if anchor:
         lines.append(f"A anchor={point(anchor)}")
     if effective:

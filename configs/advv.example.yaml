@@ -34,26 +34,61 @@ source_profile:
   max_new_tokens: 512
 
 sampler:
-  version: random_geometry_v1
-  mask_shapes: [ellipse, rectangle]
-  region_area_fraction: [0.05, 0.40]    # 미검증 초기값; 영역 면적 / 이미지 면적
+  version: random_geometry_v1          # 기본값. 객체 중심은 object_region_v2 (docs/REGION_SAMPLER.md)
+  mask_shapes: [ellipse, rectangle]    # v1 전용
+  region_area_fraction: [0.05, 0.40]    # v1 전용, 미검증 초기값; 영역 면적 / 이미지 면적
   operations: [relocation, deformation, rotation]
   operation_distribution: uniform
   displacement_diagonal_fraction: [0.02, 0.20]
   rotation_degrees: [-30.0, 30.0]
   # 공식 deformation은 별도 scale 인자가 없으며 위 displacement 범위를 사용한다.
   replay_plan: null                    # 선택: 저장한 계획의 디버깅·재현용
+  object_region:                       # object_region_v2 전용; v1에서는 검증만 하고 쓰지 않음
+    granularity:
+      relocation: [entity]
+      rotation: [part]
+      deformation: [part, entity]
+    rotation_anchor: part_entity_contact  # part 팽창 영역 ∩ (entity − part)의 centroid
+    contact_dilation_px: 3
+    on_no_region: hold_source          # 기하 영역 fallback 없음 → source_no_region 보류
+    max_consecutive_sampling_skips: 8  # 한 원본의 연속 sampling_skipped가 이 수에 닿으면 source_no_region 보류
+  # v2를 쓰려면 source_profile.prompt_path/response_schema도 v3(subjects 포함)로 바꾼다.
 
 execution:
   mode: shared_gpus_sequential
   selected_gpu_ids: null               # 필수: 사용자가 실행 시 선택
   generator_python: null
   verifier_python: null
+  proposal_python: null                # object_region_v2 전용: SAM 3 proposal worker (../.venv-sam3/bin/python)
   candidate_concurrency: 1
   worker_timeout_seconds: 1800         # 개별 작업 timeout 예시; 총 실행 상한 아님
   max_technical_retries: 1
   max_consecutive_technical_failures: 3  # 정상 NO/UNCERTAIN은 해당하지 않는 기술 장애 중단 기준
   retry_oom: false
+
+region_proposal:                       # object_region_v2 전용. 임계값은 모두 미검증 초기값
+  backend: sam3                        # 기본. 비교용: grounding_dino_sam2.1
+  model_id: facebook/sam3
+  model_path: null                     # sam3.pt가 있는 로컬 폴더 (advv prepare --only sam3)
+  model_revision: null                 # configs/upstream.lock.json의 HF revision
+  repo_path: ../third_party/sam3       # 공식 facebookresearch/sam3 checkout
+  code_revision: null                  # 위 checkout의 고정 commit
+  min_entity_score: 0.50               # 텍스트 prompt 인스턴스 점수 하한
+  min_part_score: 0.80                 # point prompt 예측 IoU 하한
+  entity_area_fraction: [0.02, 0.60]   # entity 면적 / 이미지 면적
+  part_area_fraction_of_entity: [0.02, 0.70]  # 하한 0.02: 꼬리·팔·미러 같은 작은 부위 유지(미검증)
+  dedupe_iou: 0.85
+  part_dedupe_containment: 0.95        # 작은 part가 큰 part 안에 든 비율이 이 값 이상이고
+  part_dedupe_area_ratio: 0.80         # 면적비(작은/큰)도 이 값 이상이면 같은 부위로 보고 하나만 남김(미검증)
+  part_points_per_entity: 16
+  text_parts: true                     # profile parts(부위 이름) 텍스트 prompt를 점 prompt와 병행
+  text_part_forms: [subject_part, part]  # "<subject> <part>"와 "<part>" 단독. 하나만 써도 된다
+  min_text_part_score: 0.50            # 텍스트 part 인스턴스 점수 하한(SAM 3 기본 0.5, 미검증)
+  text_part_containment: 0.85          # 텍스트 part가 entity mask 안에 들어간 비율 하한
+  suppress_point_parts_with_text: true # entity에 텍스트 part가 하나라도 남으면 그 entity의 점 part는 쓰지 않음
+  grounding_dino:                      # backend=grounding_dino_sam2.1일 때만 사용
+    box_threshold: 0.35
+    text_threshold: 0.25
 
 generator:
   backend: dragflow
@@ -131,6 +166,9 @@ visualization:
   show_area_stats: true
   show_vqa_results: true
   rejected_comparison_policy: follow_image_retention
+
+human_review:
+  enabled: false                       # true: Qwen 통과 후 advv review로 사람이 ←통과/→불합격, export는 사람 통과분만
 
 report:
   terminal_progress: true

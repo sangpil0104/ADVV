@@ -12,9 +12,10 @@ from tqdm import tqdm
 
 from .config import recipe_hash
 from .contracts import EditRequest, Source
-from .errors import BackendError, DataError, FatalBackendError, ResponseError
+from .errors import BackendError, DataError, FatalBackendError, ResponseError, SamplingSkipped
 from .ingest import scan_sources, snapshot_sources
-from .sampler import sample_edit, validate_plan
+from .proposals import build_proposals, load_proposals, profile_part_names, proposals_path, write_proposals
+from .sampler import region_table, sample_edit, validate_plan
 from .storage import (
     atomic_image,
     atomic_json,
@@ -85,6 +86,19 @@ def create_run(cfg: dict, run_id: str, *, provenance: str) -> Path:
     return run_dir
 
 
+SEMANTIC_PROFILE_KEYS = ("summary", "must_preserve", "uncertain")
+
+
+def semantic_context(profile_response: dict, preserve_hint) -> str:
+    """{{preservation_context}} of the semantic VQA: only the preservation criteria of the frozen profile.
+
+    subjects/parts name regions for the proposal sampler and are not preservation requirements. The
+    profile's own key order is kept, so a profile with only these keys renders exactly as before.
+    """
+    criteria = {k: v for k, v in profile_response.items() if k in SEMANTIC_PROFILE_KEYS}
+    return json.dumps({"source_profile": criteria, "preserve_hint": preserve_hint}, ensure_ascii=False)
+
+
 class Pipeline:
     def __init__(self, run_dir: Path, backend, *, gpu_ids=None):
         self.root = run_dir.resolve()
@@ -110,6 +124,7 @@ class Pipeline:
             [read_json(p) for p in (self.root / "records").glob("*.json")], key=lambda r: r["sequence"]
         )
         self.profiles = {}
+        self.regions = {}
         self.seen = {s.pixel_sha256 for s in self.sources}
         self.accepted = []
 
@@ -236,8 +251,155 @@ class Pipeline:
         self.eligible = [
             s for s in self.sources if self.profiles.get(s.source_id, {}).get("status") == "ready"
         ]
+        if self.cfg["sampler"]["version"] == "object_region_v2":
+            self.prepare_regions()
         if not self.eligible:
-            raise DataError("no_eligible_sources: all source profiles are uncertain or invalid")
+            raise DataError(
+                "no_eligible_sources: all sources are held (profile uncertain/invalid or no region)"
+            )
+
+    def generate_proposals(self, source: Source) -> None:
+        """Run the proposal worker once for a source whose profile is frozen, then freeze proposals.json.
+
+        A technical failure leaves no proposals.json: that is region_proposals_missing (an error), never
+        source_no_region (a hold), because a failed model call is not evidence that the image has no region.
+        """
+        sid = source.source_id
+        profile = self.profiles[sid]
+        settings = self.cfg["region_proposal"]
+        attempts = self.state.setdefault("region_proposal_generation", {}).setdefault(sid, [])
+        errors = []
+        for _ in range(1 + self.cfg["execution"]["max_technical_retries"]):
+            started = time.monotonic()
+            try:
+                raw = self.backend.propose(
+                    source, profile["response"]["subjects"], profile_part_names(profile, settings), self.root
+                )
+            except BackendError as exc:
+                attempts.append(
+                    {
+                        "status": "error",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "elapsed_seconds": time.monotonic() - started,
+                        "at": now(),
+                    }
+                )
+                self.save_state()
+                if isinstance(exc, FatalBackendError):
+                    raise
+                errors.append(exc)
+                continue
+            built = build_proposals((source.width, source.height), raw, settings)
+            written = write_proposals(
+                self.root,
+                source,
+                built,
+                backend=raw["backend"],
+                models=raw["models"],
+                settings=settings,
+                profile=profile,
+            )
+            attempts.append(
+                {
+                    "status": "completed",
+                    "proposal_status": written["status"],
+                    "elapsed_seconds": time.monotonic() - started,
+                    "info": raw.get("info"),
+                    "at": now(),
+                }
+            )
+            self.save_state()
+            return
+        raise DataError(
+            f"region_proposals_missing: {proposals_path(sid)} could not be generated ({errors[-1]}); "
+            "inspect logs/proposal.log and resume"
+        )
+
+    def prepare_regions(self):
+        """Make (once) and load frozen proposals; a source with no usable region is held, never given a
+        geometric fallback."""
+        frozen = self.state.setdefault("region_proposals", {})
+        held = set()
+        generated = False
+        for source in self.eligible:
+            sid = source.source_id
+            if not within(self.root, proposals_path(sid)).is_file():
+                self.generate_proposals(source)
+                generated = True
+            proposals = load_proposals(
+                self.root,
+                source,
+                self.cfg["region_proposal"],
+                profile=self.profiles[sid],
+                allow_fixture=self.manifest["backend"] == "fake",
+            )
+            expected = frozen.get(sid, {}).get("sha256", proposals.sha256)
+            if expected != proposals.sha256 or any(
+                r.get("region_proposals_sha256") != proposals.sha256
+                for r in self.records
+                if r["source_id"] == sid
+            ):
+                raise DataError(f"Region proposals changed for {sid}; start a new run")
+            options, excluded = region_table(proposals, self.cfg, source.width, source.height)
+            # A hold for repeated sampling skips is a run decision and survives resume.
+            held_reason = frozen.get(sid, {}).get("held_reason")
+            status = (
+                "ready"
+                if any(op in options for op in self.cfg["sampler"]["operations"]) and held_reason is None
+                else "source_no_region"
+            )
+            frozen[sid] = {
+                "sha256": proposals.sha256,
+                "status": status,
+                "proposal_status": proposals.data["status"],
+                "options": {op: {lv: len(v) for lv, v in levels.items()} for op, levels in options.items()},
+                "excluded": excluded,
+            }
+            if held_reason:
+                frozen[sid]["held_reason"] = held_reason
+            if status == "ready":
+                self.regions[sid] = proposals
+            else:
+                held.add(sid)
+                LOG.warning("source_no_region: %s has no usable entity/part proposal; holding it", sid)
+        self.eligible = [s for s in self.eligible if s.source_id not in held]
+        self.save_state()
+        if generated:
+            self.backend.close()  # The proposal model leaves the GPU before DragFlow loads.
+
+    def skip_attempt(self, index: int, attempt_index: int, exc: SamplingSkipped) -> None:
+        """Record an attempt without valid geometry, advance past it, and hold a source that keeps skipping.
+
+        A skip is neither a candidate nor a technical failure: no image, no quota, no NO.
+        """
+        source = self.eligible[index]
+        sid = source.source_id
+        skipped = self.state.setdefault("sampling_skipped", {}).setdefault(
+            sid, {"attempts": [], "consecutive": 0}
+        )
+        skipped["attempts"].append(attempt_index)
+        skipped["consecutive"] += 1
+        self.state["cursor"][sid] = attempt_index + 1
+        LOG.warning("%s", exc)
+        if skipped["consecutive"] >= self.cfg["sampler"]["object_region"]["max_consecutive_sampling_skips"]:
+            self.state["region_proposals"][sid].update(
+                status="source_no_region", held_reason="sampling_exhausted"
+            )
+            self.eligible.pop(index)
+            self.regions.pop(sid, None)
+            LOG.warning(
+                "source_no_region: %s skipped %d attempts in a row; holding it", sid, skipped["consecutive"]
+            )
+            if not self.eligible:
+                self.save_state()
+                raise DataError(
+                    "no_eligible_sources: all sources are held (profile uncertain/invalid or no region)"
+                )
+            self.state["next_source"] = index % len(self.eligible)
+        else:
+            self.state["next_source"] = (index + 1) % len(self.eligible)
+        self.save_state()
 
     def recover(self):
         self.seen = {s.pixel_sha256 for s in self.sources}
@@ -425,10 +587,7 @@ class Pipeline:
             )
             if physical.get("response", {}) and physical["response"]["answer"] == "YES":
                 profile = self.profiles[source.source_id]
-                context = json.dumps(
-                    {"source_profile": profile["response"], "preserve_hint": source.preserve_hint},
-                    ensure_ascii=False,
-                )
+                context = semantic_context(profile["response"], source.preserve_hint)
                 prompt = a["semantic_prompt"].replace("{{preservation_context}}", context)
                 self._complete(
                     record,
@@ -459,6 +618,9 @@ class Pipeline:
             self.records = sorted(
                 [read_json(p) for p in (self.root / "records").glob("*.json")], key=lambda r: r["sequence"]
             )
+            if any("human_review" in r for r in self.records):
+                # Human FAILs are discarded without regeneration; start a new run for more images.
+                raise DataError("Run is under human review; start a new run instead of resuming")
             self.state.update(status="running", last_error=None)
             self.state["segments"].append(
                 {
@@ -466,6 +628,11 @@ class Pipeline:
                     "selected_gpu_ids": self.gpu_ids,
                     "generator_gpu_ids": self.gpu_ids[:2] if self.gpu_ids else [],
                     "verifier_gpu_ids": self.gpu_ids[:1] if self.gpu_ids else [],
+                    "proposal_gpu_ids": (
+                        self.gpu_ids[:1]
+                        if self.gpu_ids and self.cfg["sampler"]["version"] == "object_region_v2"
+                        else []
+                    ),
                     "python": platform.python_version(),
                     "platform": platform.platform(),
                 }
@@ -476,10 +643,12 @@ class Pipeline:
                 self.profile_sources()
                 # Reconstruct round-robin position from the last committed reservation.
                 if self.records:
-                    last = self.records[-1]["source_id"]
-                    self.state["next_source"] = ([s.source_id for s in self.eligible].index(last) + 1) % len(
-                        self.eligible
-                    )
+                    order = [s.source_id for s in self.sources]
+                    eligible = [s.source_id for s in self.eligible]
+                    last = order.index(self.records[-1]["source_id"])
+                    # The last source may since have been held; continue with the next eligible one.
+                    following = order[last + 1 :] + order[: last + 1]
+                    self.state["next_source"] = next(eligible.index(i) for i in following if i in eligible)
                 for record in self.records:
                     self.process_candidate(record)
                 target = self.cfg["run"]["target_count"]
@@ -494,13 +663,20 @@ class Pipeline:
                         index = self.state["next_source"]
                         source = self.eligible[index]
                         attempt_index = self.state["cursor"].get(source.source_id, 0)
-                        plan = sample_edit(
-                            source,
-                            self.profiles[source.source_id]["response"],
-                            self.cfg,
-                            attempt_index,
-                            self.root,
-                        )
+                        try:
+                            plan = sample_edit(
+                                source,
+                                self.profiles[source.source_id]["response"],
+                                self.cfg,
+                                attempt_index,
+                                self.root,
+                                proposals=self.regions.get(source.source_id),
+                            )
+                        except SamplingSkipped as exc:
+                            self.skip_attempt(index, attempt_index, exc)
+                            continue
+                        if source.source_id in self.state.get("sampling_skipped", {}):
+                            self.state["sampling_skipped"][source.source_id]["consecutive"] = 0
                         record = {
                             "schema_version": "1.1",
                             "candidate_id": plan.edit_id,
@@ -515,6 +691,8 @@ class Pipeline:
                             "created_at": now(),
                             "export_status": "pending",
                         }
+                        if source.source_id in self.regions:
+                            record["region_proposals_sha256"] = self.regions[source.source_id].sha256
                         self.save_record(record)
                         self.records.append(record)
                         self.state["cursor"][source.source_id] = attempt_index + 1

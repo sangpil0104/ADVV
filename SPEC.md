@@ -77,17 +77,17 @@ Qwen의 판정은 시각적 추정이다. 물리적 사실, 정확한 종 식별
 
 ### 3.3 SourceProfile
 
-[원본 의미 추출 prompt](prompts/source_profile_v2.txt)와 [schema](schemas/source_profile.schema.json)를 사용한다. `summary`, `must_preserve`, `uncertain`을 원본과 선택 설명에서 생성한다. 원본 전체와 이 기준을 의미 VQA에 함께 넣는다. 모델이 만든 문장만 비교하지 않는다.
+[원본 의미 추출 prompt](prompts/source_profile_v2.txt)와 [schema](schemas/source_profile.schema.json)를 사용한다. `summary`, `must_preserve`, `uncertain`을 원본과 선택 설명에서 생성한다. `object_region_v2` sampler는 [v3 prompt](prompts/source_profile_v3.txt)·[schema](schemas/source_profile_v3.schema.json)를 요구하며, 여기에 영역 proposal용 `subjects`(짧은 영어 명사구 1–3개)와 `parts`(subject의 따로 움직일 수 있는 부위 이름 0–5개, 결함·사고 증거와 증거를 담은 부위는 넣지 않음)가 추가된다. 원본 전체와 이 기준을 의미 VQA에 함께 넣는다. 의미 VQA에 넣는 기준은 `summary`·`must_preserve`·`uncertain`뿐이며, `subjects`·`parts`는 영역 선택용 이름이라 넣지 않는다(§5). 모델이 만든 문장만 비교하지 않는다.
 
 추출 원문, 사용자 설명, 원본 hash, 모델·processor revision, prompt hash를 저장하고 **해당 원본의 후보를 생성하기 전에 고정**한다. 후보를 본 뒤 기준을 바꾸어 통과시키지 않는다. 명확한 종명이 보이지 않으면 종명을 발명하지 말고 관찰 가능한 구별 특징을 기록한다. 사용자 설명도 사진에서 확인할 수 없는 사실을 참으로 보장하지 않는다.
 
-`uncertain=true` 또는 유효한 profile을 얻지 못한 source는 `source_uncertain/source_error`로 보류하고 다른 원본을 처리한다. 자동 생성 profile은 GT가 아니다. 모든 source가 보류되면 `no_eligible_sources`로 종료하여 사용자 설명/입력 수정을 요청할 수 있도록 report한다. 원본에 보이는 의미 자체가 미확정인 상태로 YES 수를 채우지 않는다.
+`uncertain=true` 또는 유효한 profile을 얻지 못한 source는 `source_uncertain/source_error`로 보류하고 다른 원본을 처리한다. `object_region_v2`에서 사용할 영역 proposal이 없는 source는 `source_no_region`으로 보류한다. 자동 생성 profile은 GT가 아니다. 모든 source가 보류되면 `no_eligible_sources`로 종료하여 사용자 설명/입력 수정을 요청할 수 있도록 report한다. 원본에 보이는 의미 자체가 미확정인 상태로 YES 수를 채우지 않는다.
 
 ## 4. 무작위 편집 계획
 
 sampler는 사용 가능한 원본을 안정적인 round-robin 순서로 선택하고, 각 원본의 seed·attempt index로 새 영역·operation·방향·강도를 표본 추출한다. 총량 모드이므로 원본별 최종 채택 수는 같지 않을 수 있으며 report한다. 수락률이 높은 원본으로 자동 집중하는 학습 정책은 MVP에 없다.
 
-MVP 영역은 이미지 내부의 연결된 기하 영역(타원 또는 사각형)을 무작위 생성한 binary mask다. 객체 segmentation 모델을 필수로 추가하지 않는다. 영역이 의미 있는 객체에 정확히 맞는다는 가정은 하지 않으며, 이 방식의 수락률과 다양성은 평가한다. 후속 객체 중심 proposal은 별도 sampler 버전이다.
+MVP 영역은 이미지 내부의 연결된 기하 영역(타원 또는 사각형)을 무작위 생성한 binary mask다. 객체 segmentation 모델을 필수로 추가하지 않는다. 영역이 의미 있는 객체에 정확히 맞는다는 가정은 하지 않으며, 이 방식의 수락률과 다양성은 평가한다. 후속 객체 중심 proposal은 별도 sampler 버전이다. 무작위 사각형이 결과에 경계 이음매·잘린 객체를 남기는 문제로 entity/part mask 기반 `object_region_v2`를 추가했다(`sampler.version`으로 선택, 기본은 v1). proposal은 SAM 3(기본) 또는 Grounding DINO + SAM 2.1(비교)로 원본마다 한 번 만들어 고정하며, part는 profile `parts`의 부위 이름 텍스트 prompt와 entity 내부 점 prompt를 병행해 얻고 출처(`text`/`point`)를 기록한다(`region_proposal.text_parts`, 기본 켜짐). 텍스트 part는 entity mask 안에 충분히 들어간 인스턴스만 그 entity에 귀속한다. v2 mask는 구멍 없는 하나의 연결 영역이고 윤곽 선택점(`region_select_point`)을 포함하며, 드래그 시작점은 upstream과 같은 mask centroid다. proposal은 profile을 고정한 뒤, 첫 후보 생성 전에 SAM 3 worker(별도 환경, 선택 GPU 목록의 첫 GPU)로 만들며 DragFlow를 올리기 전에 worker를 내린다. 사용할 영역이 없으면 기하 영역으로 대체하지 않고 원본을 `source_no_region`으로 보류한다. proposal 생성이 기술 오류로 끝나 파일이 없으면 `region_proposals_missing` 오류로 멈추며 '영역 없음'으로 보지 않는다. DragFlow feature grid에서 사라지거나 시작점이 한 칸 넘게 달라지는 얇은 proposal은 편집 영역으로 쓰지 않는다. sampler·저장 계약·worker 연결은 CPU로 구현·테스트했다. ADVV adapter는 T009d에서 GPU로 5장 실행했으나(점 prompt part가 거의 나오지 않음), T012에서 부위 이름 텍스트 part를 더한 adapter를 같은 5장에 GPU로 실행했다(부위 4–7개/장, 부위 이름은 수동 지정). 실제 Qwen이 만든 profile `parts`로의 실행과 v2 `advv run`은 아직 검증하지 않았다. 비교 경로(Grounding DINO + SAM 2.1)는 미구현이다. 세부는 [영역 sampler v2 설계](docs/REGION_SAMPLER.md)를 따른다.
 
 `relocation/deformation/rotation` 중 backend에서 검증한 operation을 선택한다. 영역 면적, 이동 거리, 회전/변형 강도 분포는 설정으로 전달한다. 설정 예시의 수치는 시작점이며 도메인에 최적화된 값이 아니다. 의미를 보존하는지의 최종 판정은 VQA에서 수행한다.
 
@@ -97,18 +97,20 @@ MVP 영역은 이미지 내부의 연결된 기하 영역(타원 또는 사각�
 
 | 필드 | 규칙 |
 | --- | --- |
-| `schema_version` | `1.1` |
+| `schema_version` | `1.3` (저장된 `1.1`·`1.2` 계획도 읽음) |
 | `source_id`, `edit_id`, `attempt_index` | source 참조, 고유 edit ID, 0부터 증가하는 원본별 index |
 | `seed`, `sampler_version` | 실행 seed에서 안정적인 digest로 유도한 32-bit seed와 sampler 버전 |
 | `operation`, `operation_params` | 검증된 operation과 추가 강도·회전 등 파라미터 |
 | `region_mask_path` | 현재 run 기준 상대 경로; 생성된 0/255 PNG |
-| `source_point`, `target_point` | 정규화 원본 크기 기준 `[x,y]` |
+| `source_point`, `target_point` | 정규화 원본 크기 기준 `[x,y]`. `source_point`는 mask의 반올림 centroid로, DragFlow가 실제로 드래그를 시작하는 점이다 |
 | `anchor_point` | operation별 필요성을 upstream 변환기가 검사 |
 | `source_prompt`, `target_prompt` | 고정 profile과 편집 지시에서 작성; 결함/사고를 정상 장면으로 고치지 않도록 구성 |
+| `region_proposal_id`, `region_level`, `region_phrase` | `object_region_v2`에서 선택한 proposal ID, `entity`/`part`, 명사구. v1은 모두 `null` |
+| `region_select_point` | `object_region_v2`만: upstream이 윤곽을 고를 때 쓰는 mask 내부 점(centroid가 mask 안이면 centroid). 이동 계산에는 쓰지 않는다. v1은 `null` |
 
-좌상단 원점, `0 ≤ x < width`, `0 ≤ y < height`, source point는 mask 내부여야 한다. 빈 mask·항등 변환·범위 밖 좌표는 거부한다. 직사각형이 아닌 이미지에서도 x/y 축을 혼동하지 않는다. seed에 Python의 프로세스별 `hash()`를 사용하지 않는다.
+좌상단 원점, `0 ≤ x < width`, `0 ≤ y < height`. v1의 source point는 mask 내부여야 한다. v2는 `region_select_point`가 mask 내부이고 `source_point`가 mask centroid와 같아야 한다(오목한 mask에서는 centroid가 mask 밖일 수 있다). 빈 mask·항등 변환·범위 밖 좌표는 거부한다. 직사각형이 아닌 이미지에서도 x/y 축을 혼동하지 않는다. seed에 Python의 프로세스별 `hash()`를 사용하지 않는다.
 
-후보 계획과 mask는 생성 전에 원자적으로 저장한다. upstream `instruction.json`과 동일한 schema라고 가정하지 않고 고정 commit에 맞게 변환한다. 리사이즈·패딩은 이미지/mask/좌표에 동일한 기하 변환을 적용하고 기록한다. ADVV의 mask 표시·역변환 보간은 nearest-neighbor다. 고정 upstream 내부의 feature mask는 bilinear 보간을 사용하므로 연속값 native mask와 그 nonzero 영역을 별도로 기록한다. sampler가 반복적으로 유효 계획을 만들 수 없으면 기술 오류로 처리하며 NO로 집계하지 않는다.
+후보 계획과 mask는 생성 전에 원자적으로 저장한다. upstream `instruction.json`과 동일한 schema라고 가정하지 않고 고정 commit에 맞게 변환한다. 리사이즈·패딩은 이미지/mask/좌표에 동일한 기하 변환을 적용하고 기록한다. ADVV의 mask 표시·역변환 보간은 nearest-neighbor다. 고정 upstream 내부의 feature mask는 bilinear 보간을 사용하므로 연속값 native mask와 그 nonzero 영역을 별도로 기록한다. `random_geometry_v1` sampler가 반복적으로 유효 계획을 만들 수 없으면 기술 오류로 처리하며 NO로 집계하지 않는다. `object_region_v2`는 허용 이동 집합에서 직접 뽑으므로 보통 실패하지 않지만, 한 attempt의 기하 예산(512회)을 소진하면 run을 멈추지 않고 그 attempt를 `sampling_skipped`로 `state.json`에 기록한 뒤 cursor를 전진한다. skip은 후보·이미지를 만들지 않으므로 목표 수량, NO, 연속 기술 실패(`max_consecutive_technical_failures`) 어디에도 세지 않는다. 한 원본의 연속 skip이 `sampler.object_region.max_consecutive_sampling_skips`에 닿으면 그 원본을 `source_no_region`(`held_reason: sampling_exhausted`)으로 보류하며, 재개해도 보류는 유지된다.
 
 ### 4.2 경로 규칙
 
@@ -129,7 +131,7 @@ sampler의 요청값뿐 아니라 실제 backend에 전달된 좌표·mask와 �
 
 ## 5. 두 VQA의 입출력
 
-현실성·물리 검증은 [physical prompt](prompts/physical_plausibility_v1.txt)에 **후보 한 장**을 넣는다. 의미 보존은 [semantic prompt](prompts/semantic_preservation_v1.txt)에 **원본을 Image 1, 후보를 Image 2**로 넣고 고정 SourceProfile·사용자 설명을 데이터로 전달한다. 두 호출의 대화 상태를 공유하지 않는다.
+현실성·물리 검증은 [physical prompt](prompts/physical_plausibility_v1.txt)에 **후보 한 장**을 넣는다. 의미 보존은 [semantic prompt](prompts/semantic_preservation_v1.txt)에 **원본을 Image 1, 후보를 Image 2**로 넣고 고정 SourceProfile의 보존 기준(`summary`·`must_preserve`·`uncertain`, profile의 키 순서 유지)과 사용자 설명을 `{{preservation_context}}`에 JSON 데이터(`{"source_profile": {...}, "preserve_hint": ...}`)로 전달한다. v3 profile의 `subjects`·`parts`는 영역 proposal용이라 넣지 않는다. 그래서 v2 profile(sampler v1)의 semantic 입력은 이 규칙 전과 바이트 단위로 같다. 검증 cache identity의 `prompt_hash`는 이 context를 채운 최종 prompt의 hash다. 두 호출의 대화 상태를 공유하지 않는다.
 
 각 호출은 [단일 VQA 응답 schema](schemas/vqa_response.schema.json)를 사용한다.
 
@@ -165,6 +167,24 @@ NO 이미지는 record를 영속화한 후 현재 run이 소유한 생성 파일
 NO의 생성 픽셀이 들어간 비교 PNG·썸네일도 같은 삭제 대상이다. 원본에 편집 계획만 표시한 `drag_plan.png`는 남긴다. 시각화를 만들기 위해 삭제된 후보를 다시 생성하지 않는다.
 
 동일 후보의 의미 판정은 재질문하지 않는다. JSON 오류·일시적 기술 실패에 한해 동일 입력으로 최대 1회 추가 시도를 허용하고 모든 시도를 기록한다. OOM·모델 로드 실패는 자동 반복하지 않고 partial run을 저장한다. 총 시도 상한이 없다는 요구를 기술 실패를 숨기는 무한 재시도로 구현하지 않는다. 기본 `max_consecutive_technical_failures=3`은 generation_error/verification_error 후보가 연속 발생할 때 failed로 종료하는 장애 기준이다. 정상 NO/UNCERTAIN·중복은 이 횟수에 포함하지 않는다.
+
+### 6.1 사람 최종 검수 (선택 단계)
+
+기본값은 꺼짐(`human_review.enabled: false`)이며 이때는 기존 Qwen 전용 파이프라인과 같다. 설정에서 `enabled: true`로 두거나 `advv run ... --human-review`로 새 run을 만들 때 켠다. 값은 run 생성 시 `config.json`에 고정되며 `--resume`으로 바꿀 수 없다. 설정이 없는 기존 run은 꺼짐으로 취급한다. 꺼진 run에서 `advv review`는 거부된다.
+
+켜진 run에서는 Qwen 단계가 `completed`로 끝난 run에서 `advv review --run-dir runs/<run_id>`로 두 VQA 통과 이미지를 사람이 한 장씩 판정한다. 판정은 이분법이다.
+
+| 키 | 판정 | 처리 |
+| --- | --- | --- |
+| ← | `pass` | 유지하고 export에 포함 |
+| → | `fail` | 판정을 record에 먼저 저장한 뒤 `accepted/` 이미지와 생성 픽셀이 들어간 비교 PNG 삭제. `drag_plan.png`·record·Qwen 응답은 보존 |
+| q / Ctrl+C | 중단 | 판정한 것까지 저장, 같은 명령으로 이어서 검수 |
+
+- 화면은 `runs/<run_id>/review/current.png`(왼쪽 원본, 오른쪽 후보, 편집 표시 없음) 한 파일을 매번 덮어쓴다. VS Code에서 열어 두면 자동 갱신된다. 서버에 GUI가 없어도 된다.
+- `fail`은 재생성하지 않는다. 최종 수량은 사람 `pass` 수이며 N보다 적을 수 있다. 부족하면 새 run을 만든다. 검수가 시작된 run은 `--resume`을 거부한다.
+- 켜진 run의 export(`exports/images.jsonl`)는 사람 `pass` 이미지만 포함한다. 검수 전 이미지는 export되지 않는다. 꺼진 run은 기존처럼 Qwen 통과 이미지를 export한다.
+- record의 `human_review`에 `decision`, `reviewer`(OS 사용자명), `reviewed_at`, 판정 당시 `file_sha256`을 남긴다. 표시 전에 파일 hash를 확인한다.
+- 사람 판정은 Qwen 판정을 덮어쓰지 않고 나란히 저장한다. 두 VQA YES 중 사람 `fail` 비율로 Qwen의 오채택을 추정할 수 있다. Qwen이 NO로 버린 이미지는 검수하지 않으므로 Qwen의 오탈락은 측정할 수 없다.
 
 ## 7. 수량·중단·재개
 

@@ -99,8 +99,11 @@ def within(root: Path, relative: str, *, must_exist: bool = False) -> Path:
     return path
 
 
-def delete_generated(run_dir: Path, candidate_id: str, relative: str) -> None:
-    """Delete only known generated artifacts for this candidate, never source/accepted files."""
+def delete_generated(run_dir: Path, candidate_id: str, relative: str, *, human_rejected: bool = False) -> None:
+    """Delete only known generated artifacts for this candidate, never source files.
+
+    Accepted copies are deletable only after a durable human FAIL decision.
+    """
     safe_id(candidate_id)
     allowed = {
         f"candidates/{candidate_id}/generated.png",
@@ -108,6 +111,8 @@ def delete_generated(run_dir: Path, candidate_id: str, relative: str) -> None:
         f"visualizations/{candidate_id}/comparison.png",
         f"visualizations/{candidate_id}/thumbnail.png",
     }
+    if human_rejected:
+        allowed.add(f"accepted/{candidate_id}.png")
     p = Path(relative)
     # Interrupted atomic PNG writes can leave mkstemp files in the same owned directory.
     temp_owned = any(

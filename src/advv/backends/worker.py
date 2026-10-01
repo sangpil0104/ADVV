@@ -14,7 +14,7 @@ from ..storage import atomic_json, read_json, within
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--kind", choices=["generator", "verifier"], required=True)
+    parser.add_argument("--kind", choices=["generator", "verifier", "proposal"], required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
     args = parser.parse_args()
     cfg = read_json(args.run_dir / "config.json")
@@ -29,6 +29,10 @@ def main():
                         from .qwen import Qwen
 
                         backend = Qwen(cfg)
+                    elif args.kind == "proposal":
+                        from .region import make_proposer
+
+                        backend = make_proposer(cfg, args.run_dir)
                     else:
                         from .dragflow import DragFlow
 

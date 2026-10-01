@@ -5,6 +5,9 @@ from collections import Counter
 from pathlib import Path
 
 from .errors import DataError
+from .human_review import PASS
+from .human_review import enabled as human_review_enabled
+from .human_review import summary as human_summary
 from .storage import atomic_bytes, atomic_json, file_hash, pixel_hash, read_json, within
 from .verifiers.decision import decide
 
@@ -20,10 +23,14 @@ def export_run(run_dir: Path) -> Path:
     if manifest["backend"] != "dragflow+qwen_local":
         raise DataError("Production export refuses fake or unrecognized backends")
     sources = {s["source_id"]: s for s in read_json(run_dir / "sources.json")}
+    review = human_review_enabled(read_json(run_dir / "config.json"))
     seen = {s["pixel_sha256"] for s in sources.values()}
     rows = []
     for r in records_for(run_dir):
         if r.get("export_status") != "eligible":
+            continue
+        # With the optional human stage, only images a person passed enter the dataset.
+        if review and r.get("human_review", {}).get("decision") != PASS:
             continue
         source = sources[r["source_id"]]
         if (
@@ -34,7 +41,12 @@ def export_run(run_dir: Path) -> Path:
             raise DataError("Ineligible record in export")
         path = within(run_dir, r["image_path"], must_exist=True)
         pixels = pixel_hash(path)
-        if pixels != r["pixel_sha256"] or file_hash(path) != r["file_sha256"] or pixels in seen:
+        if (
+            pixels != r["pixel_sha256"]
+            or file_hash(path) != r["file_sha256"]
+            or (review and r["human_review"]["file_sha256"] != r["file_sha256"])
+            or pixels in seen
+        ):
             raise DataError("Export artifact failed hash/dedup verification")
         seen.add(pixels)
         rows.append(
@@ -53,6 +65,7 @@ def export_run(run_dir: Path) -> Path:
                 "file_sha256": r["file_sha256"],
                 "backend": r["backend"],
                 "record_path": f"records/{r['candidate_id']}.json",
+                "human_review": r.get("human_review"),
                 "visualization_artifacts": r.get("visualization", {}).get("artifacts", {}),
             }
         )
@@ -87,6 +100,7 @@ def report_run(run_dir: Path, *, final_status=None) -> Path:
         if r.get("checks", {}).get("semantic", {}).get("response")
     )
     cfg = read_json(run_dir / "config.json")
+    review = human_review_enabled(cfg)
     result = {
         "run_id": run_dir.name,
         "backend": read_json(run_dir / "manifest.json")["backend"],
@@ -98,8 +112,11 @@ def report_run(run_dir: Path, *, final_status=None) -> Path:
         "physical_no": physical_no,
         "semantic_no": semantic_no,
         "duplicates": sum(r.get("export_status") == "duplicate" for r in records),
+        "human_review": {"enabled": review, **(human_summary(records) if review else {})},
         "acceptance_rate": accepted / len(records) if records else None,
         "per_source": per_source,
+        "region_proposals": state.get("region_proposals"),
+        "sampling_skipped": state.get("sampling_skipped"),
         "last_error": state.get("last_error"),
         "cleanup_pending": [r["candidate_id"] for r in records if r.get("cleanup_pending")],
         "visualization_errors": [
@@ -141,10 +158,17 @@ def report_run(run_dir: Path, *, final_status=None) -> Path:
         "",
         f"Accepted: **{accepted}/{result['target']}** | Attempts: {len(records)} | Duplicates: {result['duplicates']}",
         "",
+        (
+            "Human review: pass {pass} / fail {fail} / pending {pending}. "
+            "Export contains human-passed images only.".format(**result["human_review"])
+            if review
+            else "Human review: disabled. Export contains Qwen-accepted images."
+        ),
+        "",
         "Qwen judgments are visual estimates, not physical proof or supervised ground truth.",
         "",
-        "| Candidate | Final status | Export | Preview |",
-        "| --- | --- | --- | --- |",
+        "| Candidate | Final status | Export | Human | Preview |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for record in records:
         links = []
@@ -152,7 +176,8 @@ def report_run(run_dir: Path, *, final_status=None) -> Path:
             if within(run_dir, relative).is_file():
                 links.append(f"[{name}]({relative})")
         lines.append(
-            f"| {html.escape(record['candidate_id'])} | {record['status']} | {record.get('export_status', 'pending')} | {' / '.join(links)} |"
+            f"| {html.escape(record['candidate_id'])} | {record['status']} | {record.get('export_status', 'pending')} "
+            f"| {record.get('human_review', {}).get('decision', '-')} | {' / '.join(links)} |"
         )
     if state.get("last_error"):
         lines.extend(["", "Last error: " + html.escape(str(state["last_error"]))])

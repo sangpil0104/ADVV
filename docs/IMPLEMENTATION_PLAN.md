@@ -69,6 +69,25 @@
 
 완료 기준: 수동 mask·점·GT 라벨 없이 입력 이미지에서 자동 계획과 실제 DragFlow 후보를 만든다. 수동 replay는 디버깅 수단이며 MVP 자동화의 완료 증거를 대체하지 않는다.
 
+## P2b. 객체 중심 영역 sampler v2 (SAM 3 worker 연결, GPU 통합 미검증)
+
+[설계 문서](REGION_SAMPLER.md) 기준. 기본 proposal 모델은 SAM 3, 비교용은 Grounding DINO + SAM 2.1.
+
+- [x] `.venv-sam3`(Python 3.12, torch 2.10.0+cu128, 공식 sam3 commit `2345a4a`)을 만들고(T009a) commit·HF revision·파일 SHA256을 `upstream.lock.json`에 추가했다(T009b). `advv prepare --only sam3`, preflight 검사. GPU7 스모크(T009c): 드라이버 535에서 cu128 동작, 피크 약 6.2 GiB.
+- [ ] 비교용 `.venv-region`(Python 3.10, torch 2.5.1, 공식 sam2 commit, Transformers Grounding DINO).
+- [x] `source_profile_v3`에 `subjects` 명사구를 추가한다. v2 선택 시 config가 요구한다. 실제 Qwen 출력 형식은 미확인.
+- [x] T012: `source_profile_v3`에 `parts`(부위 이름 0–5개)를 추가하고, SAM 3 worker가 부위 이름 텍스트 prompt(`"<subject> <part>"`, `"<part>"`)를 점 prompt와 병행한다. entity 포함 비율로 귀속, part 출처(`text`/`point`) 기록, proposals.json·raw receipt schema `1.1`, 설정 `text_parts`·`text_part_forms`·`min_text_part_score`·`text_part_containment`. SAM 3 processor 임계값을 ADVV 하한 −0.01로 바꿔 동점 처리 불일치(T009b QA L1)를 없앴다. 실제 Qwen의 `parts` 출력과 GPU 결과는 미확인.
+- [x] proposal 저장 계약·검증 로더, mask 정리·필터·중복 제거·part 점 선택(CPU, `proposals.py`).
+- [x] RegionProposal worker: SAM 3 텍스트 → entity mask, 점 → part multimask → raw receipt → coordinator의 `build_proposals`/`write_proposals`, pipeline에서 profile 고정 후 원본마다 1회 호출하고 DragFlow 전에 종료(T009b). 가짜 SAM 3 패키지로 프로세스 계약·오류 경로 CPU 테스트.
+- [x] T013: part 포함 중복(`part_dedupe_containment` 0.95·`part_dedupe_area_ratio` 0.80, 미검증), part 면적 하한 0.05 → 0.02, text part가 남은 entity의 point part 억제(`suppress_point_parts_with_text`, 기본 on), 의미 VQA context를 profile `summary`·`must_preserve`·`uncertain`으로 축소, v3 prompt에 "증거를 담은 부위 제외" 추가, 로더 점 좌표 범위·raw 필드 누락 `DataError`·가짜 SAM 3 reset 강제(T012 QA M1, L1–L4).
+- [x] T014(사용자 결정): `text_part_containment` 0.90 → 0.85(T012 실측 굴착기 crawler track 0.865/0.888, entity 밖 바퀴 0.0). 포함 중복 0.95/0.80은 유지하며 "바지 다리" vs "바지+신발 다리" 같은 거의 같은 쌍이 남는 한계를 [설계 §8](REGION_SAMPLER.md#8-남은-결정)에 기록. T014 GPU9 재실행(5장)에서 crawler track이 text part로 채택(containment 0.865, rotation 가능)됐고 part 28→30, rotation 가능 24→26. 0.85–0.90 구간 표본은 3개뿐이라 entity 밖 객체 유입 가능성은 더 큰 표본으로 확인해야 한다.
+- [ ] ADVV adapter를 통한 실제 SAM 3 GPU 실행(`tests/test_sam3_integration.py`, `-m integration`)과 v2 `advv run`(DragFlow/Qwen 환경 필요, T005). T009d(GPU9)에서 T012 이전 adapter로, T012에서 텍스트 part adapter로 `assets/` 5장을 실행했다. T013 규칙은 T012 receipt를 CPU로 다시 build해 확인했다(adapter 변경 없음). v2 `advv run`과 실제 Qwen profile `parts`는 미실행.
+- [x] QA2 N1–N4: feature grid에서 사라지거나 시작점이 한 칸 넘게 달라지는 얇은 proposal 제외, rotation grid 반지름 하한(4칸)과 실효 각도 기록, v1 설정의 `max_consecutive_sampling_skips` 선택화, subjects 숫자 시작 단어 허용.
+- [x] `object_region_v2` sampler: operation별 granularity, part–entity 접촉 anchor, `source_no_region` 보류, EditRequest schema `1.3`(centroid 시작점 + 윤곽 선택점), 허용 이동 집합 직접 추출, `sampling_skipped`, 시각화 footer.
+- [x] CPU 테스트: 결정론, granularity 매핑, anchor 위치, 필터 경계값, fallback 금지, proposal hash 변경 재개 거부, v1 golden 회귀, v2 golden·seed 민감도, 오목 mask centroid, 가로 전체 entity relocation, skip 재개·보류, profile 연결, revision 고정, 로더 재검사.
+- [ ] `assets/` 샘플로 proposal 품질·실패 사례를 확인하고 v1과 소규모 N의 VQA 통과율·이음매 비율을 비교한다.
+- [ ] grounding 비교: SAM 3 vs Grounding DINO + SAM 2.1 (선택: Qwen3.5 box, 좌표 형식 실측).
+
 ## P3. 두 VQA와 목표 수량 반복
 
 - [x] candidate-only physical, source+candidate semantic 호출을 별도로 연결한다.
@@ -88,6 +107,15 @@
 - [x] 실제 설치·실행·GPU 선택·재개 예시와 한계를 README에 갱신한다.
 
 완료 기준: 사용자가 이미지와 N을 넣고 GT 없이 파이프라인을 사용할 수 있다. 품질 검증용 사람 판정과 모델 학습용 GT를 구분한다.
+
+## P4b. 사람 최종 검수
+
+- [x] run별 on/off: 설정 `human_review.enabled`(기본 false) 또는 `advv run --human-review`. 꺼지면 기존 Qwen 전용 파이프라인과 동일.
+- [x] `advv review`: 두 VQA 통과 이미지를 ← pass / → fail로 판정, fail은 판정 저장 후 삭제하고 재생성하지 않는다.
+- [x] `review/current.png` 한 파일을 갱신하는 원본·후보 비교 화면(VS Code 자동 갱신).
+- [x] export는 사람 pass만 포함, report에 pass/fail/pending 집계, 검수 시작 후 resume 거부.
+- [x] CPU 테스트: 판정·삭제·export 필터·중단 후 이어하기·resume 차단·hash 변경·삭제 실패 재시도·화살표 키 파싱.
+- [ ] 실제 터미널(VS Code Remote + tmux)에서 실제 생성 이미지로 키 입력과 화면 갱신 확인.
 
 ## P5. 이후 연구: 후속 성능과 선택적 fine-tuning
 
@@ -112,6 +140,47 @@ P5는 1차 파이프라인의 완료 조건이 아니다. Qwen 추가 학습이 
 - `advv run N ...` 위치 인자를 추가하고 기존 `--target-count N`과 YAML 수량 입력을 유지했다.
 - 잘못된 수량, 두 형식의 동시 지정, 재개 중 수량 입력은 모델·run 접근 전에 거부한다.
 - CLI에서 설정 로드·실제 수량 반복·저장·재개까지 CPU fixture로 검사했다. NO와 중복을 제외하고 요청한 총량에서 종료하는지 확인했다. 전체 CPU 테스트 **79개 통과**, lint 통과. 이번 변경 검증에서 GPU 추론은 실행하지 않았다.
+
+## 2026-09-30 사람 최종 검수
+
+- 선택 단계인 `advv review`와 `human_review.py`를 추가했다(기본 꺼짐). 전체 CPU 테스트 **101개 통과**, lint 통과. 키 입력은 pipe로 넣은 escape sequence로 검사했고 실제 터미널과 실제 생성 이미지로는 아직 확인하지 않았다.
+- 코드가 바뀌어 implementation hash가 달라졌으므로 이 변경 전에 만든 run은 `--resume`할 수 없다(기존 규칙).
+
+## 2026-09-30 sampler v2 CPU 부분
+
+- `proposals.py`(저장 계약·검증·후처리), `object_region_v2` sampler, `source_profile_v3`, 설정 검증, pipeline의 proposal 고정·`source_no_region` 보류, 시각화 footer를 추가했다. 기본 sampler는 v1 그대로다.
+- proposal 파일이 없으면 `region_proposals_missing` 오류로 멈춘다. 생성 worker(SAM 3)는 T009에서 연결한다.
+- 전체 CPU 테스트 **127개 통과**(신규 26), lint 통과. GPU·모델 추론은 실행하지 않았다.
+- 코드가 바뀌어 implementation hash가 달라졌으므로 이전 run은 `--resume`할 수 없다.
+
+## 2026-09-30 sampler v2 QA 수정 (T002-fix)
+
+- 시작점을 upstream과 같은 mask centroid로 계산하고 윤곽 선택용 `region_select_point`를 분리했다(EditRequest `1.3`). relocation/deformation 이동량은 허용 정수 이동 집합에서 직접 뽑고, 유효 기하가 없는 조합은 정적으로 제외한다. 그래도 예산을 소진한 attempt는 `sampling_skipped`로 넘기고 연속 skip 상한에서 `source_no_region` 보류한다.
+- proposals.json에 frozen profile hash와 `subjects`를 기록하고 phrases 일치를 검사한다. 실제 proposal backend는 고정된 `model_revision`을 요구한다. 로더가 점수·면적·중복·항목 타입을 다시 검사하고 깨진 JSON을 `DataError`로 거부한다. v3 schema의 subjects 패턴을 prompt(소문자)와 맞췄다.
+- 전체 CPU 테스트 **136개 통과**(신규 9), lint 통과. GPU·모델 추론은 실행하지 않았다.
+- `src/advv/*.py`가 바뀌어 implementation hash가 달라졌으므로 이전 run은 `--resume`할 수 없다.
+
+## 2026-09-30 SAM 3 proposal worker 연결 (T009b)
+
+- `backends/region.py`·`sam3.py`(worker `--kind proposal`), `proposals.py`의 `collect_raw`·raw receipt, pipeline의 proposal 생성(profile 고정 후 원본마다 1회, 기술 오류는 재시도 후 `region_proposals_missing`, 영역 없음은 `source_no_region`), `LocalBackend`의 단일 worker 생명주기, `prepare --only sam3`, preflight의 SAM 3 검사, `upstream.lock.json`의 `region_proposal.sam3`, 설정 `region_proposal.repo_path`·`code_revision`을 추가했다.
+- QA2 N1–N4를 수정했다. v2 계획의 `operation_params`에 `upstream_grid_start`(모든 operation), `grid_rotation_degrees`·`grid_radius_cells`(rotation)가 추가되어 v2 golden을 다시 만들었다. v1 golden은 그대로다.
+- 전체 CPU 테스트 **155개 통과**(신규 19, 통합 1개는 기본 제외), lint 통과. GPU·모델 추론·다운로드는 실행하지 않았다.
+- `src/advv/*.py`가 바뀌어 implementation hash가 달라졌으므로 이전 run은 `--resume`할 수 없다.
+
+## 2026-10-01 부위 이름 텍스트 part (T012)
+
+- T009d GPU 실측에서 점 prompt part가 거의 나오지 않아(SAM 3가 점마다 entity 전체를 가장 확신) 사용자 결정(부위 이름 텍스트 + 점 병행)에 따라 profile `parts`와 텍스트 part를 추가했다. v3 prompt·schema는 실제 run에 쓰인 적이 없어 제자리 수정했다.
+- text part와 point part는 같은 정리·면적·중복·grid 규칙을 거치고, 정렬은 text 먼저(척도가 다른 두 점수를 비교하지 않음)다. 로더는 출처·부위 명사구·점 좌표·순서·profile `parts`를 다시 검사한다. v1·v2 golden은 바뀌지 않았다.
+- 전체 CPU 테스트 **173개 통과**(신규 18, 통합 1개는 기본 제외), lint 통과. GPU·모델 추론·다운로드는 실행하지 않았다.
+- `src/advv/*.py`가 바뀌어 implementation hash가 달라졌으므로 이전 run은 `--resume`할 수 없다. proposals.json·raw receipt `1.0`도 읽지 않는다.
+
+## 2026-10-01 part 규칙 조정과 의미 VQA context 축소 (T013)
+
+- T012 GPU 실측(포함 관계 중복, 면적 하한 탈락, 사고 차량 point part의 손상 증거)과 사용자 결정에 따라 part 포함 중복, 면적 하한 0.02, text part가 남은 entity의 point part 억제를 추가했다. 새 설정 3개는 v2 필수, v1은 묶음 단위 선택.
+- T012 QA M1: 의미 VQA의 `{{preservation_context}}`에 profile `summary`·`must_preserve`·`uncertain`만 넣는다. prompt 파일은 그대로이며, v2 profile(sampler v1) run의 semantic 입력은 바이트 단위로 같다(테스트). v3 profile run은 `subjects`·`parts`가 빠진다.
+- T012 receipt 5장을 CPU로 다시 build: part 수 27 → 28, rotation 가능 22 → 24(이미지별 표는 `_workspace/T013_implementer_report.md`). 포함 중복 0.95/0.80은 실측 쌍을 합치지 않았다.
+- 전체 CPU 테스트 **199개 통과**(신규 26, 통합 1개는 기본 제외), lint 통과. v1·v2 golden 불변. GPU·모델 추론·다운로드는 실행하지 않았다.
+- `src/advv/*.py`가 바뀌어 implementation hash가 달라졌으므로 이전 run은 `--resume`할 수 없다. T012에 쓴 proposals.json은 settings 불일치로 읽지 않으며, raw receipt(`1.1`)는 그대로 다시 build할 수 있다.
 
 ## 2026-09-30 실제 N=1 실행
 

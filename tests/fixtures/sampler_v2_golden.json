@@ -1,0 +1,506 @@
+[
+  [
+    3109694017,
+    "deformation",
+    "part_000_000",
+    [
+      30,
+      40
+    ],
+    [
+      27,
+      34
+    ],
+    null,
+    [
+      30,
+      40
+    ],
+    {
+      "displacement_pixels": [
+        -3,
+        -6
+      ],
+      "upstream_grid_start": [
+        14,
+        20
+      ]
+    }
+  ],
+  [
+    1093090469,
+    "relocation",
+    "entity_001",
+    [
+      94,
+      24
+    ],
+    [
+      98,
+      35
+    ],
+    null,
+    [
+      94,
+      24
+    ],
+    {
+      "displacement_pixels": [
+        4,
+        11
+      ],
+      "entity_bbox_after": [
+        84,
+        21,
+        113,
+        50
+      ],
+      "upstream_grid_start": [
+        44,
+        12
+      ]
+    }
+  ],
+  [
+    2408276256,
+    "deformation",
+    "part_000_000",
+    [
+      30,
+      40
+    ],
+    [
+      21,
+      40
+    ],
+    null,
+    [
+      30,
+      40
+    ],
+    {
+      "displacement_pixels": [
+        -9,
+        0
+      ],
+      "upstream_grid_start": [
+        14,
+        20
+      ]
+    }
+  ],
+  [
+    3419643777,
+    "relocation",
+    "entity_001",
+    [
+      94,
+      24
+    ],
+    [
+      99,
+      28
+    ],
+    null,
+    [
+      94,
+      24
+    ],
+    {
+      "displacement_pixels": [
+        5,
+        4
+      ],
+      "entity_bbox_after": [
+        85,
+        14,
+        114,
+        43
+      ],
+      "upstream_grid_start": [
+        44,
+        12
+      ]
+    }
+  ],
+  [
+    2506935593,
+    "rotation",
+    "part_000_000",
+    [
+      30,
+      40
+    ],
+    [
+      30,
+      42
+    ],
+    [
+      41,
+      40
+    ],
+    [
+      30,
+      40
+    ],
+    {
+      "requested_rotation_degrees": -11.172831809513795,
+      "grid_rotation_degrees": -11.3099324740202,
+      "grid_radius_cells": 5.0,
+      "anchor_method": "part_entity_contact",
+      "contact_dilation_px": 3,
+      "anchor_coordinates": "normalized_original_px",
+      "upstream_grid_start": [
+        14,
+        20
+      ]
+    }
+  ],
+  [
+    1551909742,
+    "deformation",
+    "part_000_000",
+    [
+      30,
+      40
+    ],
+    [
+      27,
+      49
+    ],
+    null,
+    [
+      30,
+      40
+    ],
+    {
+      "displacement_pixels": [
+        -3,
+        9
+      ],
+      "upstream_grid_start": [
+        14,
+        20
+      ]
+    }
+  ],
+  [
+    2192442261,
+    "relocation",
+    "entity_001",
+    [
+      94,
+      24
+    ],
+    [
+      77,
+      23
+    ],
+    null,
+    [
+      94,
+      24
+    ],
+    {
+      "displacement_pixels": [
+        -17,
+        -1
+      ],
+      "entity_bbox_after": [
+        63,
+        9,
+        92,
+        38
+      ],
+      "upstream_grid_start": [
+        44,
+        12
+      ]
+    }
+  ],
+  [
+    3819512767,
+    "rotation",
+    "part_000_000",
+    [
+      30,
+      40
+    ],
+    [
+      30,
+      38
+    ],
+    [
+      41,
+      40
+    ],
+    [
+      30,
+      40
+    ],
+    {
+      "requested_rotation_degrees": 11.166598547921204,
+      "grid_rotation_degrees": 11.309932474020172,
+      "grid_radius_cells": 5.0,
+      "anchor_method": "part_entity_contact",
+      "contact_dilation_px": 3,
+      "anchor_coordinates": "normalized_original_px",
+      "upstream_grid_start": [
+        14,
+        20
+      ]
+    }
+  ],
+  [
+    589236018,
+    "relocation",
+    "entity_001",
+    [
+      94,
+      24
+    ],
+    [
+      87,
+      31
+    ],
+    null,
+    [
+      94,
+      24
+    ],
+    {
+      "displacement_pixels": [
+        -7,
+        7
+      ],
+      "entity_bbox_after": [
+        73,
+        17,
+        102,
+        46
+      ],
+      "upstream_grid_start": [
+        44,
+        12
+      ]
+    }
+  ],
+  [
+    3675626611,
+    "relocation",
+    "entity_000",
+    [
+      40,
+      40
+    ],
+    [
+      23,
+      35
+    ],
+    null,
+    [
+      40,
+      40
+    ],
+    {
+      "displacement_pixels": [
+        -17,
+        -5
+      ],
+      "entity_bbox_after": [
+        3,
+        15,
+        42,
+        54
+      ],
+      "upstream_grid_start": [
+        18,
+        20
+      ]
+    }
+  ],
+  [
+    1921505106,
+    "rotation",
+    "part_000_000",
+    [
+      30,
+      40
+    ],
+    [
+      30,
+      38
+    ],
+    [
+      41,
+      40
+    ],
+    [
+      30,
+      40
+    ],
+    {
+      "requested_rotation_degrees": 12.96770615535251,
+      "grid_rotation_degrees": 11.309932474020172,
+      "grid_radius_cells": 5.0,
+      "anchor_method": "part_entity_contact",
+      "contact_dilation_px": 3,
+      "anchor_coordinates": "normalized_original_px",
+      "upstream_grid_start": [
+        14,
+        20
+      ]
+    }
+  ],
+  [
+    2158438125,
+    "relocation",
+    "entity_000",
+    [
+      40,
+      40
+    ],
+    [
+      34,
+      49
+    ],
+    null,
+    [
+      40,
+      40
+    ],
+    {
+      "displacement_pixels": [
+        -6,
+        9
+      ],
+      "entity_bbox_after": [
+        14,
+        29,
+        53,
+        68
+      ],
+      "upstream_grid_start": [
+        18,
+        20
+      ]
+    }
+  ],
+  [
+    1385952735,
+    "deformation",
+    "entity_000",
+    [
+      40,
+      40
+    ],
+    [
+      21,
+      24
+    ],
+    null,
+    [
+      40,
+      40
+    ],
+    {
+      "displacement_pixels": [
+        -19,
+        -16
+      ],
+      "upstream_grid_start": [
+        18,
+        20
+      ]
+    }
+  ],
+  [
+    2465656701,
+    "deformation",
+    "part_000_000",
+    [
+      30,
+      40
+    ],
+    [
+      23,
+      42
+    ],
+    null,
+    [
+      30,
+      40
+    ],
+    {
+      "displacement_pixels": [
+        -7,
+        2
+      ],
+      "upstream_grid_start": [
+        14,
+        20
+      ]
+    }
+  ],
+  [
+    1337446304,
+    "rotation",
+    "part_000_000",
+    [
+      30,
+      40
+    ],
+    [
+      31,
+      45
+    ],
+    [
+      41,
+      40
+    ],
+    [
+      30,
+      40
+    ],
+    {
+      "requested_rotation_degrees": -25.067387214836387,
+      "grid_rotation_degrees": -21.801409486351815,
+      "grid_radius_cells": 5.0,
+      "anchor_method": "part_entity_contact",
+      "contact_dilation_px": 3,
+      "anchor_coordinates": "normalized_original_px",
+      "upstream_grid_start": [
+        14,
+        20
+      ]
+    }
+  ],
+  [
+    1760127657,
+    "deformation",
+    "entity_000",
+    [
+      40,
+      40
+    ],
+    [
+      35,
+      44
+    ],
+    null,
+    [
+      40,
+      40
+    ],
+    {
+      "displacement_pixels": [
+        -5,
+        4
+      ],
+      "upstream_grid_start": [
+        18,
+        20
+      ]
+    }
+  ]
+]

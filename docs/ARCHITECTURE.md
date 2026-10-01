@@ -9,15 +9,18 @@ MVP 코드는 아래 구조로 구현했다. CPU 및 실제 Qwen 검증을 마�
 | `cli.py`, `config.py` | CLI, YAML 경로 해석, 설정 검증 |
 | `prepare.py`, `preflight.py` | revision 고정 다운로드, 로컬 자원·입력·환경 확인 |
 | `contracts.py`, `ingest.py` | Source/EditRequest/응답 계약, EXIF 정규화, split·중복 검사 |
-| `sampler.py` | seed/source/attempt 기반 연결된 area와 operation·점 선택 |
+| `sampler.py` | seed/source/attempt 기반 연결된 area와 operation·점 선택. `random_geometry_v1`(기본)과 저장된 proposal에서 고르는 `object_region_v2`([설계](REGION_SAMPLER.md)) |
+| `proposals.py` | v2 영역 proposal의 raw 수집 순서(`collect_raw`: entity → 부위 이름 텍스트 part의 entity 귀속 → 점 part), raw receipt 읽기·쓰기, mask 정리·필터·중복 제거(IoU 중복과 part 포함 중복, text part가 남은 entity의 point part 억제, part 출처 `text`/`point` 기록), `proposals/<source_id>/` 저장 계약과 검증 로더(CPU) |
 | `pipeline.py` | 원본 profile 고정, 총 N장 반복, 기록·재시도·재개·판정·격리 |
 | `backends/process.py`, `worker.py` | 독립 Python 환경, GPU 노출, JSONL 요청/응답, durable receipt |
 | `backends/dragflow.py` | 고정 upstream Dragger 호출과 입력/좌표 변환 |
 | `backends/qwen.py` | 로컬 Qwen의 새 대화별 단일/두 이미지 추론 |
+| `backends/region.py`, `sam3.py` | v2 proposal worker: 공식 SAM 3 텍스트(entity, 부위 이름 part)·점(part) prompt를 한 `set_image`로 처리해 raw receipt 기록. processor 임계값은 ADVV 하한보다 0.01 낮게 주고 채택은 ADVV `≥` 필터가 정한다. Grounding DINO + SAM 2.1은 자리만 있고 미구현 오류 |
 | `verifiers/parser.py`, `decision.py` | 엄격한 전체 JSON 파싱, 두 판정 AND |
 | `storage.py` | atomic write, hash, 단일 writer lock, 소유 파일 삭제 |
 | `visualization.py` | CPU 원본 overlay, 나란히 비교, 좌표·영역 metadata |
-| `reporting.py` | 검증된 image-only export, 통계, 정적 report 링크 |
+| `reporting.py` | 검증된 image-only export(사람 검수가 켜진 run은 pass만), 통계, 정적 report 링크 |
+| `human_review.py` | run별로 켜고 끄는 선택 단계. Qwen 통과 이미지의 사람 최종 판정(← pass / → fail), 검수 화면 PNG, fail 삭제 |
 
 가중치·CUDA 없는 검사는 `tests/test_*.py`, 실제 Qwen 검사는 `scripts/check_qwen.py`, 요청값 그림은 `scripts/preview_edits.py`를 사용한다. fake backend는 tests fixture에만 있으며 production export가 거부한다.
 
@@ -25,18 +28,24 @@ MVP 코드는 아래 구조로 구현했다. CPU 및 실제 Qwen 검증을 마�
 
 ```text
 원본 ingest/snapshot → 로컬 Qwen source profile 고정
+[object_region_v2일 때] proposals.json이 없는 원본마다: Qwen worker 종료 → SAM 3 proposal worker(첫 선택 GPU, profile subjects·parts 전달)
+    → raw receipt → CPU build/write proposals.json (기술 오류가 재시도 후에도 남으면 region_proposals_missing 오류)
+    → 모든 원본 처리 후 proposal worker 종료
+    proposals/<source_id>/ 로드·검증·hash 고정 → 영역 없는 원본은 source_no_region 보류
 while 저장된 unique accepted 수 < 전체 목표 N:
     원본을 round-robin 선택
     source별 attempt index로 무작위 계획·mask 생성 및 예약 저장
+        (v2에서 유효 기하가 없는 attempt는 sampling_skipped로 state에 남기고 cursor만 전진)
     Qwen worker 종료 → DragFlow load/generate → generation receipt → worker 종료
     실제 입력 metadata와 비교 PNG 저장
     Qwen load → candidate-only physical VQA
     physical == YES이면 original-first/candidate-second semantic VQA
     판정 record 영속화 → 채택/격리/삭제 → 최종 PNG 갱신
 export/report 저장 → completed 확정
+[human_review.enabled일 때만] advv review: 사람이 accepted를 ←/→로 판정 → fail 삭제 → export(사람 pass만)/report 갱신
 ```
 
-coordinator는 torch를 import하지 않는다. worker별 Python 실행 파일과 환경을 분리하고 시작 전에 `CUDA_VISIBLE_DEVICES`를 지정한다. 선택 목록 앞 두 GPU는 DragFlow의 논리 cuda:0/1에, 첫 GPU는 Qwen의 cuda:0에 대응한다. 나머지 선택 GPU의 병렬 활용은 후속 최적화다. 각 execution segment에 사용 GPU·Python·시작/종료를 기록한다.
+coordinator는 torch를 import하지 않는다. worker별 Python 실행 파일과 환경을 분리하고 시작 전에 `CUDA_VISIBLE_DEVICES`를 지정한다. 선택 목록 앞 두 GPU는 DragFlow의 논리 cuda:0/1에, 첫 GPU는 Qwen과 SAM 3 proposal worker의 cuda:0에 대응한다. 한 번에 한 종류의 model worker만 띄운다(`LocalBackend`가 종류를 바꿀 때 이전 worker를 종료). 나머지 선택 GPU의 병렬 활용은 후속 최적화다. 각 execution segment에 사용 GPU·Python·시작/종료를 기록한다.
 
 프로파일과 두 VQA는 같은 Qwen checkpoint를 사용하지만 호출마다 새 메시지를 구성한다. 이전 응답을 대화 context에 누적하지 않는다. timeout 후에는 worker를 종료하고 제한된 기술 재시도에 새 worker를 사용한다. OOM·로드 실패는 즉시 partial failed로 종료한다. 연속 3개 후보의 기술 실패도 장애로 중단한다. 정상 NO/UNCERTAIN·중복에는 전체 시도 제한이 없다.
 
@@ -52,11 +61,11 @@ coordinator는 torch를 import하지 않는다. worker별 Python 실행 파일�
 | deformation | deformation | binary area, start/target displacement; 독립 scale 인자 없음 |
 | rotation | rotation | binary area, start/target, 별도 anchor |
 
-원본과 mask, `instruction.json`은 후보별 `backend_input/`에 저장한다. sampler는 feature grid로 반올림했을 때 항등 이동/범위 이탈도 거부한다. 이미지 크기는 공식 코드에서 16의 배수로 낮춰 bicubic resize하며, 실제 시작점은 upstream이 feature 영역의 centroid로 교체한다. feature 영역의 bilinear soft mask를 NPY로 저장하고, nonzero 영역을 nearest로 원본 크기에 복원해 표시한다. 선택 영역과 확대 gradient mask를 혼동하지 않는다.
+원본과 mask, `instruction.json`은 후보별 `backend_input/`에 저장한다. sampler는 feature grid로 반올림했을 때 항등 이동/범위 이탈도 거부한다. 이미지 크기는 공식 코드에서 16의 배수로 낮춰 bicubic resize하며, 실제 시작점은 upstream이 feature 영역의 centroid로 교체한다. 그래서 `source_point`는 두 sampler 모두 mask의 반올림 centroid이고, 이동·회전·항등 검사도 이 점으로 계산한다. `object_region_v2`의 비볼록 mask는 centroid가 mask 밖일 수 있으므로 윤곽 선택용 mask 내부 점 `region_select_point`를 따로 저장해 `instruction.json`의 `centroids[0]`으로 넘긴다(`centroids[1]`은 `target_point`). upstream centroid는 원본 mask를 feature grid로 bilinear(align_corners=False, antialias 없음) 축소한 뒤 `> 0.5`인 영역에서 계산된다. v2 sampler는 이 축소를 재현해 grid 영역이 비거나 그 centroid가 원본 centroid의 grid 점과 한 칸 넘게 다른 얇은 proposal을 제외하므로, 남은 proposal에서만 두 시작점이 grid 한 칸 이내다. v1 계획에는 이 검사를 적용하지 않는다(v1 계획은 변경 전과 같다). feature 영역의 bilinear soft mask를 NPY로 저장하고, nonzero 영역을 nearest로 원본 크기에 복원해 표시한다. 선택 영역과 확대 gradient mask를 혼동하지 않는다.
 
-Qwen은 `Qwen3_5ForConditionalGeneration`과 `AutoProcessor`로 실제 이미지 tensor를 전달한다. profile은 원본 한 장, physical은 후보 한 장, semantic은 원본·후보 두 장 순서다. bf16, eval/inference mode, thinking off, greedy decoding을 사용한다. chat template의 비활성화 표기를 확인하고 새 토큰만 decode한다. prompt·ordered image hashes·profile/hint·모델·processor·전처리·decoding 조건이 검증 identity에 포함된다.
+Qwen은 `Qwen3_5ForConditionalGeneration`과 `AutoProcessor`로 실제 이미지 tensor를 전달한다. profile은 원본 한 장, physical은 후보 한 장, semantic은 원본·후보 두 장 순서다. bf16, eval/inference mode, thinking off, greedy decoding을 사용한다. chat template의 비활성화 표기를 확인하고 새 토큰만 decode한다. prompt·ordered image hashes·profile/hint·모델·processor·전처리·decoding 조건이 검증 identity에 포함된다. semantic prompt에는 profile의 `summary`·`must_preserve`·`uncertain`과 hint만 채우며(`subjects`·`parts` 제외), identity의 `prompt_hash`는 채운 뒤의 prompt hash다.
 
-환경은 DragFlow torch 2.5.1 / Transformers 4.48.0 / Diffusers 0.32.2, Qwen torch 2.6.0 / Transformers 5.17.0으로 분리했다. 전체 설치 버전은 `environments/*.freeze.txt`와 run의 `config.json`에 남긴다.
+환경은 DragFlow torch 2.5.1 / Transformers 4.48.0 / Diffusers 0.32.2, Qwen torch 2.6.0 / Transformers 5.17.0, SAM 3 torch 2.10.0+cu128(Python 3.12, `.venv-sam3`)으로 분리했다. SAM 3 공식 코드 commit·가중치 revision·파일 SHA256은 `configs/upstream.lock.json`의 `region_proposal.sam3`에 있다. 전체 설치 버전은 `environments/*.freeze.txt`와 run의 `config.json`에 남긴다.
 
 ## 저장·복구
 
@@ -66,6 +75,8 @@ runs/<run_id>/
 ├── inputs/images/<source_id>.png
 ├── profiles/<source_id>.json
 ├── profiles/<source_id>_receipts/
+├── proposals/<source_id>/         # object_region_v2만: proposals.json + entity/part mask PNG
+│   └── receipt/                   # worker raw.json, raw_masks.npz, response.json
 ├── edit_regions/<candidate_id>.png
 ├── records/<candidate_id>.json
 ├── candidates/<candidate_id>/
@@ -90,11 +101,13 @@ NO 판정·hash를 저장한 다음 run 소유의 생성 이미지·비교 PNG·
 
 ```bash
 advv prepare
+advv prepare --only sam3   # object_region_v2용 gated SAM 3 (선택)
 advv preflight --config configs/advv.local.yaml --input-dir assets --target-count 10 --gpus 0,1
 advv run 10 --config configs/advv.local.yaml --input-dir assets --gpus 0,1 --run-id pilot_001
 advv run --run-dir runs/pilot_001 --resume --gpus 2,3
 advv export --run-dir runs/pilot_001
 advv report --run-dir runs/pilot_001
+advv review --run-dir runs/pilot_001
 ```
 
 숫자는 실행 예시다. `run N`과 기존 `--target-count N`은 동일한 전체 채택 수량으로 정규화하고, 양의 정수 여부·중복 지정·재개 시 수량 입력을 parser에서 검사한다. 수량을 생략한 새 실행은 YAML 설정을 사용한다. preflight는 가중치를 다운로드하거나 추론하지 않는다. CLI 경로는 현재 디렉터리, YAML 경로는 YAML 파일 위치, manifest 이미지 경로는 dataset root 기준이다. `--input-dir`은 manifest 입력을 해제한다. Python 실행 파일의 venv symlink는 resolve하지 않아 독립 환경이 유지된다.

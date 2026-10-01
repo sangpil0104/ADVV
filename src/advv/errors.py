@@ -24,3 +24,7 @@ class FatalBackendError(BackendError):
 
 class RunCancelled(ADVVError):
     pass
+
+
+class SamplingSkipped(DataError):
+    """No valid geometry for one object_region_v2 attempt; the attempt is skipped, not failed."""

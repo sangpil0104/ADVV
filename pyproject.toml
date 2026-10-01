@@ -22,6 +22,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["integration: needs local model weights and explicitly selected GPUs"]
+addopts = "-m 'not integration'"  # GPU checks run only with -m integration
 
 [tool.ruff]
 target-version = "py310"
