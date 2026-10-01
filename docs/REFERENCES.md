@@ -87,3 +87,7 @@ Transformers 포트는 5.10.1에서 SAM 3 텍스트 인코더 가중치가 로�
 - `environments/*.freeze.txt`: 설치한 coordinator/DragFlow/Qwen 환경.
 - `integration_checks/qwen_worker/results.json`: 실제 Qwen3.5-4B의 단일/두 이미지 추론, torch 2.6.0 / Transformers 5.17.0, 약 9.5 GB 이하의 관측 allocated VRAM. 다른 이미지 크기의 요구량을 보장하지 않는다.
 - run `config.json`에 prompt/model/environment, `manifest.json`에 implementation hash, `state.json`에 실행 segment를 기록한다.
+
+## DragFlow 가속 탐색
+
+논문 조사, 가속 패치 측정, RegionDrag식 초기화·LazyDrag 검토 결과는 [research/](research/README.md)에 보존했다. (B)·(C)와 TF32는 보류 상태다.
