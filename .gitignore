@@ -31,3 +31,7 @@ configs/*.local.yaml
 *.pem
 *.key
 .DS_Store
+
+# Harness intermediate artifacts
+_workspace/
+_workspace_*/
