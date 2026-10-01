@@ -331,17 +331,22 @@ def region_table(proposals: ProposalSet, cfg: dict, width: int, height: int) -> 
 
     An option is kept only if at least one valid geometry exists for it, so sampling cannot stall on it.
     A proposal is left out entirely when its region vanishes on DragFlow's feature grid or the grid centroid
-    upstream drags from lies more than one cell from the planned start (thin masks, QA2 N1).
+    upstream drags from lies more than one cell from the planned start (thin masks, QA2 N1), or when the
+    experimental object_region.region_phrase_filter does not match it (counted as phrase_filter).
     """
     settings = cfg["sampler"]
     key = digest([settings, width, height])
     if key in proposals.cache:
         return proposals.cache[key]
     region = settings["object_region"]
+    phrase_filter = region.get("region_phrase_filter")
     distance = displacement_range(cfg, width, height)
     options: dict = {}
     excluded: dict[str, int] = {}
     for item, level, entity in proposals.items():
+        if phrase_filter is not None and not phrase_matches(phrase_filter, item, level):
+            excluded["phrase_filter"] = excluded.get("phrase_filter", 0) + 1
+            continue
         mask = proposals.masks[item["proposal_id"]]
         start = centroid(mask)  # DragFlow's actual drag start.
         begin = upstream_grid_start(mask, width, height)
@@ -360,6 +365,7 @@ def region_table(proposals: ProposalSet, cfg: dict, width: int, height: int) -> 
             "proposal_id": item["proposal_id"],
             "level": level,
             "phrase": entity["phrase"],
+            "proposal_phrase": item.get("phrase"),  # A part's own text phrase; None for point parts.
             "bbox": item["bbox"],
             "start": start,
             "grid_start": begin,
@@ -385,6 +391,15 @@ def region_table(proposals: ProposalSet, cfg: dict, width: int, height: int) -> 
             options.setdefault(op, {}).setdefault(level, []).append(candidate)
     proposals.cache[key] = (options, excluded)
     return options, excluded
+
+
+def phrase_matches(phrase_filter: dict, item: dict, level: str) -> bool:
+    """Experimental region_phrase_filter: the proposal's own phrase (a point part has none) contains one of
+    the listed strings, case-insensitively, at the filtered level (null: either level)."""
+    if phrase_filter["level"] not in (None, level):
+        return False
+    phrase = (item.get("phrase") or "").lower()
+    return any(text.lower() in phrase for text in phrase_filter["phrases_contain"])
 
 
 def sample_object_region(
@@ -441,6 +456,9 @@ def sample_object_region(
         if not grid_ok(start, end, anchor, w, h, True):
             continue
         params["upstream_grid_start"] = option["grid_start"]
+        if region.get("region_phrase_filter") is not None:
+            params["region_phrase_filter"] = region["region_phrase_filter"]
+            params["region_proposal_phrase"] = option["proposal_phrase"]
         break
     else:
         raise SamplingSkipped(

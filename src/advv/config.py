@@ -55,6 +55,9 @@ def load_config(path: Path, *, input_dir=None, target_count=None, gpus=None, hum
         cfg["execution"]["selected_gpu_ids"] = parse_gpus(gpus)
     if human_review is not None:
         cfg["human_review"] = {**(cfg.get("human_review") or {}), "enabled": human_review}
+    region = cfg.get("sampler", {}).get("object_region")
+    if isinstance(region, dict) and "region_phrase_filter" in region and region["region_phrase_filter"] is None:
+        del region["region_phrase_filter"]  # Explicit null is the default: same plans and recipe hash as absent.
     # Stored in full so every new run's config.json states which DragFlow speedups were on (default none).
     cfg["generator"]["speedups"] = parse_speedups(cfg["generator"].get("speedups"))
     cfg["_config_path"] = str(path)
@@ -310,6 +313,24 @@ def validate_object_region(s: dict, require, *, used: bool = True) -> None:
             type(m) in (int, float) and 0 < m <= 180,
             "object_region.rotation_min_executed_degrees must be in (0, 180]",
         )
+    validate_phrase_filter(o.get("region_phrase_filter"), require, used=used)
+
+
+def validate_phrase_filter(f, require, *, used: bool) -> None:
+    """Experimental/debugging restriction of selectable regions; null (default) keeps every proposal."""
+    if f is None:
+        return
+    require(used, "object_region.region_phrase_filter is only for object_region_v2")
+    require(
+        isinstance(f, dict) and set(f) == {"level", "phrases_contain"},
+        "object_region.region_phrase_filter must be {level: part|entity|null, phrases_contain: [...]}",
+    )
+    require(f["level"] in (None, "part", "entity"), "region_phrase_filter.level must be part, entity or null")
+    texts = f["phrases_contain"]
+    require(
+        isinstance(texts, list) and texts and all(isinstance(t, str) and t.strip() for t in texts),
+        "region_phrase_filter.phrases_contain must be a non-empty list of non-empty strings",
+    )
 
 
 ROTATION_ERROR_KEYS = ("rotation_max_error_degrees", "rotation_max_error_fraction", "rotation_min_executed_degrees")

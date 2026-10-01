@@ -86,6 +86,7 @@
 - [ ] ADVV adapter를 통한 실제 SAM 3 GPU 실행(`tests/test_sam3_integration.py`, `-m integration`)과 v2 `advv run`(DragFlow/Qwen 환경 필요, T005). T009d(GPU9)에서 T012 이전 adapter로, T012에서 텍스트 part adapter로 `assets/` 5장을 실행했다. T013 규칙은 T012 receipt를 CPU로 다시 build해 확인했다(adapter 변경 없음). v2 `advv run`과 실제 Qwen profile `parts`는 미실행.
 - [x] QA2 N1–N4: feature grid에서 사라지거나 시작점이 한 칸 넘게 달라지는 얇은 proposal 제외, rotation grid 반지름 하한(4칸)과 실효 각도 기록, v1 설정의 `max_consecutive_sampling_skips` 선택화, subjects 숫자 시작 단어 허용.
 - [x] `object_region_v2` sampler: operation별 granularity, part–entity 접촉 anchor, `source_no_region` 보류, EditRequest schema `1.3`(centroid 시작점 + 윤곽 선택점), 허용 이동 집합 직접 추출, `sampling_skipped`, 시각화 footer.
+- [x] 실험·디버깅용 `region_phrase_filter`(T023, 기본 없음): phrase·level이 맞는 영역만 선택, 없으면 `source_no_region` 보류.
 - [x] CPU 테스트: 결정론, granularity 매핑, anchor 위치, 필터 경계값, fallback 금지, proposal hash 변경 재개 거부, v1 golden 회귀, v2 golden·seed 민감도, 오목 mask centroid, 가로 전체 entity relocation, skip 재개·보류, profile 연결, revision 고정, 로더 재검사.
 - [ ] `assets/` 샘플로 proposal 품질·실패 사례를 확인하고 v1과 소규모 N의 VQA 통과율·이음매 비율을 비교한다.
 - [ ] grounding 비교: SAM 3 vs Grounding DINO + SAM 2.1 (선택: Qwen3.5 box, 좌표 형식 실측).
@@ -183,6 +184,13 @@ P5는 1차 파이프라인의 완료 조건이 아니다. Qwen 추가 학습이 
 - T012 receipt 5장을 CPU로 다시 build: part 수 27 → 28, rotation 가능 22 → 24(이미지별 표는 `_workspace/T013_implementer_report.md`). 포함 중복 0.95/0.80은 실측 쌍을 합치지 않았다.
 - 전체 CPU 테스트 **199개 통과**(신규 26, 통합 1개는 기본 제외), lint 통과. v1·v2 golden 불변. GPU·모델 추론·다운로드는 실행하지 않았다.
 - `src/advv/*.py`가 바뀌어 implementation hash가 달라졌으므로 이전 run은 `--resume`할 수 없다. T012에 쓴 proposals.json은 settings 불일치로 읽지 않으며, raw receipt(`1.1`)는 그대로 다시 build할 수 있다.
+
+## 2026-10-01 실험용 region phrase 필터 (T023, GPU 미사용)
+
+- `sampler.object_region.region_phrase_filter`(`{level: part|entity|null, phrases_contain: [...]}`, 기본 생략/null = 기존 동작)를 추가했다. 실험·디버깅용 선택 옵션이며 v2에서만 허용한다. 맞는 proposal만 선택 후보로 남기고, 조합이 없으면 `source_no_region` 보류(fallback 없음). 기록 위치는 [설계 §3.4](REGION_SAMPLER.md#34-실험용-region-phrase-필터-t023).
+- `runs/v2_cat_001`의 cat proposals(읽기만)에 `{level: part, phrases_contain: [leg]}`를 CPU로 적용: `front leg` 2개·`cat front leg` 2개가 rotation·deformation 모두 가능, entity·head·tail 3개 제외.
+- 다음 run용 `configs/advv.v2cat_leg.local.yaml`(v2pilot2 복사 + 필터, git 제외)을 만들었다.
+- 전체 CPU 테스트 **273개 통과**(신규 15, 통합 2개는 기본 제외), lint 통과. v1·v2 golden 불변. GPU·모델·다운로드 미실행. `src/advv/*.py`(`config.py`, `sampler.py`, `pipeline.py`, `reporting.py`) 변경으로 implementation hash가 바뀌어 이전 run은 `--resume`할 수 없다.
 
 ## 2026-10-01 측정 스크립트 판정·안전 정리와 export 기록 (T017-fix, GPU 미측정)
 

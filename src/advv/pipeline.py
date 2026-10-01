@@ -375,11 +375,18 @@ class Pipeline:
             }
             if held_reason:
                 frozen[sid]["held_reason"] = held_reason
+            phrase_filter = self.cfg["sampler"]["object_region"].get("region_phrase_filter")
+            if phrase_filter is not None:
+                frozen[sid]["region_phrase_filter"] = phrase_filter
             if status == "ready":
                 self.regions[sid] = proposals
             else:
                 held.add(sid)
-                LOG.warning("source_no_region: %s has no usable entity/part proposal; holding it", sid)
+                LOG.warning(
+                    "source_no_region: %s has no usable entity/part proposal%s; holding it",
+                    sid,
+                    " matching region_phrase_filter" if phrase_filter is not None else "",
+                )
         self.eligible = [s for s in self.eligible if s.source_id not in held]
         self.save_state()
         if generated:

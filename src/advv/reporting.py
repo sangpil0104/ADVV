@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 from collections import Counter
 from pathlib import Path
 
@@ -131,6 +132,8 @@ def report_run(run_dir: Path, *, final_status=None) -> Path:
         "acceptance_rate": accepted / len(records) if records else None,
         "per_source": per_source,
         "region_proposals": state.get("region_proposals"),
+        # Experimental object_region_v2 restriction; null means every usable proposal was selectable.
+        "region_phrase_filter": (cfg["sampler"].get("object_region") or {}).get("region_phrase_filter"),
         "sampling_skipped": state.get("sampling_skipped"),
         "last_error": state.get("last_error"),
         "cleanup_pending": [r["candidate_id"] for r in records if r.get("cleanup_pending")],
@@ -173,6 +176,14 @@ def report_run(run_dir: Path, *, final_status=None) -> Path:
         "",
         speedup_line(result["generator_speedups"]),
         "",
+    ]
+    if result["region_phrase_filter"] is not None:
+        lines += [
+            "Region phrase filter (experimental): only proposals matching "
+            f"`{html.escape(json.dumps(result['region_phrase_filter']))}` were selectable.",
+            "",
+        ]
+    lines += [
         f"Accepted: **{accepted}/{result['target']}** | Attempts: {len(records)} | Duplicates: {result['duplicates']}",
         "",
         (

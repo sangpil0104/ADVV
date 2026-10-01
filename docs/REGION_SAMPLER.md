@@ -144,6 +144,16 @@ worker 세부(`src/advv/backends/sam3.py`, 공식 commit `2345a4a`):
 - 한 attempt의 기하 예산은 512회다(각도 거부만 소모). 소진하면 run을 멈추지 않고 `SamplingSkipped`로 그 attempt를 `state.json`의 `sampling_skipped[source_id].attempts`에 기록하고 cursor를 전진한다. skip은 후보·이미지가 없으므로 목표 수량·NO·연속 기술 실패 카운트에 들어가지 않는다. 같은 원본의 연속 skip이 `max_consecutive_sampling_skips`에 닿으면 그 원본을 `source_no_region`(`held_reason: sampling_exhausted`)으로 보류하고, 재개 때도 보류를 유지한다. 계획이 만들어지면 연속 카운트는 0으로 돌아간다. report.json에 `sampling_skipped`를 남긴다.
 - v1의 rotation anchor는 사각형 좌상단이라 물리적 의미가 없었다. v2는 `operation_params`에 `anchor_method`, `contact_dilation_px`, 좌표계(`normalized_original_px`)를 기록한다.
 
+### 3.4 실험용 region phrase 필터 (T023)
+
+`sampler.object_region.region_phrase_filter`는 **실험·디버깅용 선택 옵션**이다(예: "이번 run은 다리만 편집"). 일반 사용자 필수 입력이 아니며, 생략하거나 `null`이면 기존 동작과 같다(명시적 `null`은 로드 때 지워 계획·recipe hash가 생략과 같다). 값은 `{level: part|entity|null, phrases_contain: [문자열, ...]}`이다.
+
+- 각 proposal의 **자기 phrase**(entity는 entity 명사구, text part는 `cat front leg` 같은 part 명사구, point part는 phrase가 없어 항상 불일치)를 소문자로 바꿔, `phrases_contain` 중 하나라도 부분 문자열로 포함하고 `level`(null이면 둘 다)이 맞으면 선택 가능하다. 다른 proposal은 grid 검사 전에 빠지고 `excluded.phrase_filter`로 센다.
+- 필터는 후보만 좁힌다. operation별 granularity·grid·rotation 가능성 검사와 선택 순서(operation → level → proposal → 기하, 같은 seed 규칙)는 그대로이고, 남은 조합에서 결정론적으로 뽑는다. 남은 조합이 없으면 아래 규칙대로 `source_no_region` 보류이며 기하 영역이나 필터 없는 선택으로 대체하지 않는다.
+- 기록: 필터는 run `config.json`과 recipe hash에 들어가 재개 시 바뀌면 거부된다. `state.json`·`report.json`의 `region_proposals[source_id].region_phrase_filter`, `report.json`의 `region_phrase_filter`, `report.md` 첫머리, 각 계획의 `operation_params.region_phrase_filter`와 선택된 proposal의 phrase(`region_proposal_phrase`)에 남는다. 필터가 없으면 이 키들은 계획·state에 추가되지 않는다(`report.json`의 `region_phrase_filter`는 `null`).
+- 계획의 `region_phrase`와 편집 문장은 기존처럼 entity 명사구(`a part of the cat`)다.
+- 필터는 편집 후보 범위만 바꾼다. 물리·의미 보존 VQA의 prompt와 판정 기준은 그대로다(SPEC의 "수동 계획은 디버깅·재현용 선택 입력" 원칙과 같은 위치).
+
 한 원본에서 선택 가능한 (proposal, operation) 조합이 없으면 `source_no_region`으로 보류하고 경고를 남긴다. 모든 원본이 보류되면 기존 `no_eligible_sources`로 종료한다. 기하 영역으로 대체하지 않는다.
 
 ## 4. 저장과 재현성
@@ -241,6 +251,9 @@ sampler:
     rotation_max_error_degrees: 3.0    # (0, 180]. 실효 각도 허용 오차 = max(이 값,
     rotation_max_error_fraction: 0.30  # [0, 1]   이 비율 × |요청각|) (T015)
     rotation_min_executed_degrees: 2.0 # (0, 180]. 목표 칸의 실효각은 요청각과 같은 부호, |실효각| ≥ 이 값 (T015-fix)
+    # region_phrase_filter:            # 선택, 실험·디버깅용(§3.4). v2에서만 허용, 생략/null = 기존 동작
+    #   level: part                    # part | entity | null
+    #   phrases_contain: [leg]         # 비어 있지 않은 문자열 목록, 소문자 부분 일치
 
 execution:
   proposal_python: null       # ../.venv-sam3/bin/python

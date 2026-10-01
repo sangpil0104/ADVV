@@ -56,6 +56,9 @@ sampler:
     rotation_max_error_fraction: 0.30  # max(이 각도, 이 비율 × |요청각|). 밖이면 그 각도를 다시 뽑음(미검증)
     rotation_min_executed_degrees: 2.0 # 목표 칸은 실효각이 요청각과 같은 부호이고 |실효각| ≥ 이 값일 때만 인정
                                        # (실효 0°·반대 방향 회전 차단). 요청각 하한 |요청각| ≥ 2°와는 별개 키
+    # region_phrase_filter: null       # 실험·디버깅용(일반 사용자 입력 아님). 생략/null이면 기존 동작.
+    #   level: part                    # part | entity | null(둘 다). proposal 자신의 phrase를 소문자 부분 일치로 검사
+    #   phrases_contain: [leg]         # 하나라도 포함하면 선택 가능. 맞는 조합이 없으면 source_no_region 보류(fallback 없음)
   # v2를 쓰려면 source_profile.prompt_path/response_schema도 v4(subjects + subject별 parts)로 바꾼다.
   # text_parts: false이면 v3(subjects만 사용)도 된다.
 
