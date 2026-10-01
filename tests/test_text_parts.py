@@ -1,6 +1,7 @@
 """Named-part text prompts next to point prompts: collection, attribution, filters, contract (CPU only)."""
 
 import copy
+import json
 
 import numpy as np
 import pytest
@@ -11,7 +12,7 @@ from advv.errors import ConfigError, DataError
 from advv.pipeline import Pipeline, create_run
 from advv.proposals import build_proposals, collect_raw, load_proposals, text_part_phrases, write_proposals
 from advv.storage import atomic_json, read_json
-from conftest import FakeBackend
+from conftest import PROJECT, FakeBackend
 from test_region_sampler import H, W, point_part, profile_for, rect
 
 KITTEN = rect(20, 20, 59, 59)
@@ -30,10 +31,15 @@ def text_part(phrase, score, mask, inside=1.0, index=0):
     }
 
 
+def kitten_parts(names):
+    """v4 per-subject part names of the kitten (no entry when there are none)."""
+    return [{"subject": "kitten", "parts": list(names)}] if names else []
+
+
 def raw_with(parts, names=("tail",)):
     return {
         "phrases": ["kitten"],
-        "parts": list(names),
+        "parts": kitten_parts(names),
         "entities": [{"phrase": "kitten", "score": 0.9, "mask": KITTEN, "parts": parts}],
     }
 
@@ -77,10 +83,11 @@ def test_collect_attributes_text_instances_by_containment(v2cfg):
             "cat tail": [(rect(70, 30, 80, 49), 0.4)],
         }
     )
-    raw = collect_raw(predictor, ["kitten", "cat"], ["tail"], settings, lambda i: i)
+    names = [{"subject": "kitten", "parts": ["tail"]}, {"subject": "cat", "parts": ["tail"]}]
+    raw = collect_raw(predictor, ["kitten", "cat"], names, settings, lambda i: i)
     # "tail" is asked once and offered to both entities.
     assert predictor.queries == ["kitten", "cat", "kitten tail", "tail", "cat tail"]
-    assert raw["parts"] == ["tail"]
+    assert raw["parts"] == names
     kitten, cat = ([p for p in e["parts"] if p["source"] == "text"] for e in raw["entities"])
     assert [(p["phrase"], p["instance_index"]) for p in kitten] == [
         ("kitten tail", 0),
@@ -102,14 +109,14 @@ def test_collect_attributes_text_instances_by_containment(v2cfg):
 def test_text_parts_off_asks_no_part_phrases(v2cfg):
     settings = {**v2cfg["region_proposal"], "text_parts": False, "part_points_per_entity": 1}
     predictor = Predictor({"kitten": [(KITTEN, 0.9)], "kitten tail": [(TAIL, 0.9)]})
-    raw = collect_raw(predictor, ["kitten"], ["tail"], settings, lambda i: i)
+    raw = collect_raw(predictor, ["kitten"], kitten_parts(["tail"]), settings, lambda i: i)
     assert predictor.queries == ["kitten"]
     assert {p["source"] for p in raw["entities"][0]["parts"]} == {"point"}
 
 
 def test_low_entities_get_no_part_queries(v2cfg):
     predictor = Predictor({"kitten": [(KITTEN, 0.3)], "kitten tail": [(TAIL, 0.9)]})
-    raw = collect_raw(predictor, ["kitten"], ["tail"], v2cfg["region_proposal"], lambda i: i)
+    raw = collect_raw(predictor, ["kitten"], kitten_parts(["tail"]), v2cfg["region_proposal"], lambda i: i)
     assert predictor.queries == ["kitten"] and raw["entities"][0]["parts"] == []
 
 
@@ -134,7 +141,7 @@ def test_build_orders_text_first_and_counts_rejections_by_source(v2cfg):
         ("part_000_000", "text", "kitten tail", 0.6),
         ("part_000_001", "point", None, 0.9),
     ]
-    assert kept[1]["point"] == [50, 30] and built["parts"] == ["tail"]
+    assert kept[1]["point"] == [50, 30] and built["parts"] == kitten_parts(["tail"])
     assert built["rejected"] == {
         "text_part_score": 1,
         "text_part_containment": 1,
@@ -175,7 +182,7 @@ def mixed_settings(v2cfg):
 def written(settings, source, root, parts=None, names=("tail",)):
     if parts is None:
         parts = [text_part("kitten tail", 0.6, TAIL), point_part(0.9, rect(40, 20, 59, 39))]
-    profile = profile_for(["kitten"], names)
+    profile = profile_for(["kitten"], kitten_parts(names))
     built = build_proposals((W, H), raw_with(parts, names), settings)
     write_proposals(
         root,
@@ -201,7 +208,7 @@ def test_text_part_contract_round_trip(v2cfg, source, tmp_path):
     profile = written(settings, source, tmp_path)
     loaded = load_proposals(tmp_path, source, settings, profile=profile, allow_fixture=True)
     data = loaded.data
-    assert data["schema_version"] == "1.1" and data["parts"] == ["tail"]
+    assert data["schema_version"] == "1.2" and data["parts"] == kitten_parts(["tail"])
     first, second = data["entities"][0]["parts"]
     assert first["source"] == "text" and first["phrase"] == "kitten tail" and "point" not in first
     assert second["source"] == "point" and second["point"] == [50, 30] and "phrase" not in second
@@ -235,8 +242,9 @@ def test_loader_rechecks_text_part_provenance(v2cfg, source, tmp_path):
         expect(point, "point prompt must lie inside entity_000")
     suppressing = v2cfg["region_proposal"]
     expect({**data, "settings": suppressing}, "point parts are suppressed", settings=suppressing)
-    expect({**data, "parts": ["tail", "head"]}, "parts differ from the frozen source profile")
-    other = {**profile, "response": {**profile["response"], "parts": ["head"]}}
+    expect({**data, "parts": kitten_parts(["tail", "head"])}, "parts differ from the frozen source profile")
+    expect({**data, "parts": ["tail"]}, "parts differ from the frozen source profile")  # v3 flat list
+    other = {**profile, "response": {**profile["response"], "parts": kitten_parts(["head"])}}
     expect(data, "parts differ", profile=other)
     expect(data, "settings differ", settings={**settings, "text_parts": False})
 
@@ -248,7 +256,7 @@ def test_loader_needs_text_parts_before_point_parts(v2cfg, source, tmp_path):
     point = {"proposal_id": "part_000_000", "source": "point", "point": [50, 30], "score": 0.9}
     point["mask"] = rect(40, 20, 59, 39)
     built["entities"][0]["parts"] = [point, {**text, "proposal_id": "part_000_001"}]
-    profile = profile_for(["kitten"], ["tail"])
+    profile = profile_for(["kitten"], kitten_parts(["tail"]))
     write_proposals(
         tmp_path, source, built, backend="fixture", models={"f": "x"}, settings=settings, profile=profile
     )
@@ -266,18 +274,18 @@ def test_write_refuses_parts_other_than_the_profile(v2cfg, source, tmp_path):
             backend="fixture",
             models={"f": "x"},
             settings=v2cfg["region_proposal"],
-            profile=profile_for(["kitten"], ["head"]),
+            profile=profile_for(["kitten"], kitten_parts(["head"])),
         )
 
 
-@pytest.mark.parametrize("text_parts, expected", [(True, ["tail", "front leg"]), (False, [])])
+@pytest.mark.parametrize("text_parts, expected", [(True, kitten_parts(["tail", "front leg"])), (False, [])])
 def test_pipeline_sends_frozen_profile_parts(v2cfg, text_parts, expected):
     v2cfg["region_proposal"]["text_parts"] = text_parts
     raw = {
         "phrases": ["kitten"],
         "entities": [{"phrase": "kitten", "score": 0.9, "mask": KITTEN, "parts": []}],
     }
-    backend = FakeBackend(subjects=["kitten"], parts=["tail", "front leg"], proposals=raw)
+    backend = FakeBackend(subjects=["kitten"], parts=kitten_parts(["tail", "front leg"]), proposals=raw)
     root = create_run(v2cfg, f"parts_{text_parts}", provenance="fake")
     state = Pipeline(root, backend).run()
     assert state["status"] == "completed"
@@ -306,10 +314,22 @@ def test_text_part_config_validation(v2cfg, cfg):
     no_parts = copy.deepcopy(v2cfg)
     schema = no_parts["_assets"]["profile_schema"]
     schema["required"] = [k for k in schema["required"] if k != "parts"]
-    with pytest.raises(ConfigError, match="profile with parts"):
+    with pytest.raises(ConfigError, match="per-subject parts"):
         validate_config(no_parts)
     no_parts["region_proposal"]["text_parts"] = False
     validate_config(no_parts)  # Point parts alone do not need profile parts.
+    v3 = copy.deepcopy(v2cfg)  # v3 parts are one flat list shared by every subject (T015)
+    v3["_assets"]["profile_schema"] = json.loads((PROJECT / "schemas/source_profile_v3.schema.json").read_text())
+    with pytest.raises(ConfigError, match=r"per-subject parts \(source_profile_v4\)"):
+        validate_config(v3)
+    v3["region_proposal"]["text_parts"] = False
+    validate_config(v3)  # subjects alone still ground entities
+    v2_profile = copy.deepcopy(v3)
+    v2_profile["_assets"]["profile_schema"] = json.loads(
+        (PROJECT / "schemas/source_profile.schema.json").read_text()
+    )
+    with pytest.raises(ConfigError, match=r"subjects \(source_profile_v4, or v3 with text_parts false\)"):
+        validate_config(v2_profile)
     legacy = copy.deepcopy(cfg)
     for key in ("text_parts", "text_part_forms", "min_text_part_score", "text_part_containment"):
         del legacy["region_proposal"][key]

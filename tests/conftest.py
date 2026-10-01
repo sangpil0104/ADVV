@@ -29,13 +29,13 @@ def v2cfg(cfg):
     cfg = copy.deepcopy(cfg)
     cfg["sampler"]["version"] = "object_region_v2"
     for key, name in (
-        ("prompt_path", "prompts/source_profile_v3.txt"),
-        ("response_schema", "schemas/source_profile_v3.schema.json"),
+        ("prompt_path", "prompts/source_profile_v4.txt"),
+        ("response_schema", "schemas/source_profile_v4.schema.json"),
     ):
         cfg["source_profile"][key] = str(PROJECT / name)
-    cfg["_assets"]["profile_prompt"] = (PROJECT / "prompts/source_profile_v3.txt").read_text()
+    cfg["_assets"]["profile_prompt"] = (PROJECT / "prompts/source_profile_v4.txt").read_text()
     cfg["_assets"]["profile_schema"] = json.loads(
-        (PROJECT / "schemas/source_profile_v3.schema.json").read_text()
+        (PROJECT / "schemas/source_profile_v4.schema.json").read_text()
     )
     validate_config(cfg)
     return cfg

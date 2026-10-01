@@ -55,7 +55,7 @@ def test_v2_run_semantic_prompt_leaves_out_subjects_and_parts(v2cfg):
         "phrases": ["kitten"],
         "entities": [{"phrase": "kitten", "score": 0.9, "mask": KITTEN, "parts": []}],
     }
-    backend = FakeBackend(subjects=["kitten"], parts=["tail"], proposals=raw)
+    backend = FakeBackend(subjects=["kitten"], parts=[{"subject": "kitten", "parts": ["tail"]}], proposals=raw)
     root = create_run(v2cfg, "semantic_v2", provenance="fake")
     assert Pipeline(root, backend).run()["status"] == "completed"
     (prompt,) = semantic_prompts(backend)

@@ -3,8 +3,9 @@
 Run only on one GPU whose owner you checked (advv-gpu-safety), e.g.
   ADVV_SAM3_GPU=7 ADVV_SAM3_SUBJECTS=cat ADVV_SAM3_PARTS="head,front leg,tail" \
     python -m pytest -m integration tests/test_sam3_integration.py -s
-ADVV_SAM3_SUBJECTS / ADVV_SAM3_PARTS are comma-separated and stand in for a frozen profile's subjects / parts
-(an empty ADVV_SAM3_PARTS means no named parts: point prompts only).
+ADVV_SAM3_SUBJECTS is comma-separated and ADVV_SAM3_PARTS is "subject=part,part;subject=part"; they stand in
+for a frozen v4 profile's subjects / per-subject parts. A plain "part,part" list belongs to the first subject;
+an empty ADVV_SAM3_PARTS means no named parts (point prompts only).
 Needs .venv-sam3 with `pip install --no-deps -e .`, third_party/sam3 and the pinned checkpoint.
 """
 
@@ -26,6 +27,18 @@ from conftest import PROJECT
 pytestmark = pytest.mark.integration
 
 
+def per_subject_parts(value: str, subjects: list[str]) -> list[dict]:
+    if not value:
+        return []
+    if "=" not in value:
+        value = f"{subjects[0]}={value}"
+    entries = []
+    for item in value.split(";"):
+        subject, names = item.split("=", 1)
+        entries.append({"subject": subject, "parts": [n for n in names.split(",") if n]})
+    return entries
+
+
 def test_sam3_worker_on_selected_gpu(tmp_path):
     gpu = os.environ.get("ADVV_SAM3_GPU")
     if not gpu:
@@ -33,7 +46,7 @@ def test_sam3_worker_on_selected_gpu(tmp_path):
     lock = read_json(PROJECT / "configs/upstream.lock.json")["region_proposal"]["sam3"]
     image = Path(os.environ.get("ADVV_SAM3_IMAGE", PROJECT / "assets/cat_stretched.jpg"))
     subjects = os.environ.get("ADVV_SAM3_SUBJECTS", "cat").split(",")
-    parts = [p for p in os.environ.get("ADVV_SAM3_PARTS", "head,front leg,tail").split(",") if p]
+    parts = per_subject_parts(os.environ.get("ADVV_SAM3_PARTS", "head,front leg,tail"), subjects)
     inputs = tmp_path / "input"
     inputs.mkdir()
     shutil.copy(image, inputs / image.name)

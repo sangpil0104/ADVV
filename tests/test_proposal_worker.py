@@ -17,7 +17,8 @@ from conftest import PROJECT, FakeBackend
 
 FAKE_SAM3 = PROJECT / "tests/fixtures/fake_sam3"
 SUBJECTS = ["kitten", "box"]
-PARTS = ["tail", "head"]
+# Only the kitten has named parts: the box is never asked for a tail or head (v4 per-subject parts).
+PARTS = [{"subject": "kitten", "parts": ["tail", "head"]}]
 
 
 def rect(x0, y0, x1, y1):
@@ -93,7 +94,7 @@ def test_worker_receipt_feeds_frozen_proposals(worker_cfg):
     )
     rejected = data["rejected"]
     assert rejected["text_part_duplicate"] == 1 and rejected["text_part_score"] == 1
-    assert rejected["text_part_containment"] == 3  # outside tail for the kitten; both tails for the box
+    assert rejected["text_part_containment"] == 1  # the tail outside the kitten; the box asks for no part
     raw = read_json(folder / "receipt/raw.json")
     assert raw["backend"] == "fixture" and raw["source_pixel_sha256"] == source.pixel_sha256
     assert raw["parts"] == PARTS and raw["info"]["confidence_threshold"] == pytest.approx(0.49)
@@ -110,6 +111,9 @@ def test_worker_receipt_feeds_frozen_proposals(worker_cfg):
     ]
     assert [p["mask"] is None for p in text] == [False, False, True, True]
     assert [p["containment"] for p in text] == [1.0, 1.0, 0.0, 1.0]
+    # The kitten's part names are never asked for the box (v2_pilot_001 asked "tree front bumper").
+    assert [e["phrase"] for e in raw["entities"]] == ["kitten", "box"]
+    assert not [p for p in raw["entities"][1]["parts"] if p["source"] == "text"]
     response = read_json(folder / "receipt/response.json")
     assert response["ok"] and response["result"]["raw_sha256"]
     assert state["region_proposal_generation"][sid][-1]["status"] == "completed"
@@ -137,7 +141,7 @@ def test_finished_receipt_is_reused_without_a_worker(worker_cfg, monkeypatch):
     with pytest.raises(AssertionError, match="reused"):
         LocalBackend(worker_cfg, root).propose(source, ["kitten"], PARTS, root)  # other phrases: new request
     with pytest.raises(AssertionError, match="reused"):
-        LocalBackend(worker_cfg, root).propose(source, SUBJECTS, ["tail"], root)  # other parts: new request
+        LocalBackend(worker_cfg, root).propose(source, SUBJECTS, [{"subject": "kitten", "parts": ["tail"]}], root)  # other parts: new request
 
 
 @pytest.mark.parametrize(

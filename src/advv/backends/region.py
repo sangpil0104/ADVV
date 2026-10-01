@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ..contracts import Source
 from ..errors import ConfigError, DataError
-from ..proposals import collect_raw, part_seed, write_raw
+from ..proposals import collect_raw, part_seed, subject_parts_error, write_raw
 from ..storage import load_rgb, within
 
 
@@ -39,8 +39,9 @@ class Proposer:
         subjects, parts = request["subjects"], request["parts"]
         if not subjects or not all(isinstance(s, str) and s for s in subjects):
             raise DataError(f"No grounding phrases for {source.source_id}")
-        if not isinstance(parts, list) or not all(isinstance(p, str) and p for p in parts):
-            raise DataError(f"Part names for {source.source_id} must be non-empty strings")
+        problem = subject_parts_error(parts, subjects)
+        if problem:
+            raise DataError(f"Part names for {source.source_id}: {problem}")
         image = load_rgb(within(self.run_dir, source.image_path, must_exist=True))
         settings = self.cfg["region_proposal"]
         seed = self.cfg["run"]["seed"]

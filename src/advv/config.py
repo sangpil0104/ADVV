@@ -169,11 +169,11 @@ def validate_config(cfg: dict) -> None:
         schema = cfg.get("_assets", {}).get("profile_schema", {})
         require(
             "subjects" in schema.get("required", []),
-            "object_region_v2 needs a source profile with subjects (source_profile_v3)",
+            "object_region_v2 needs a source profile with subjects (source_profile_v4, or v3 with text_parts false)",
         )
         require(
-            not cfg["region_proposal"]["text_parts"] or "parts" in schema.get("required", []),
-            "region_proposal.text_parts needs a source profile with parts (source_profile_v3)",
+            not cfg["region_proposal"]["text_parts"] or per_subject_parts(schema),
+            "region_proposal.text_parts needs a source profile with per-subject parts (source_profile_v4)",
         )
     require(cfg["source_profile"]["mode"] == "auto_with_optional_hint", "Unsupported profile mode")
     require(
@@ -248,6 +248,16 @@ def validate_config(cfg: dict) -> None:
     )
 
 
+def per_subject_parts(schema: dict) -> bool:
+    """Profile schema v4: a required parts list of {subject, parts} objects (v3 had one flat name list)."""
+    items = schema.get("properties", {}).get("parts", {}).get("items", {})
+    return (
+        "parts" in schema.get("required", [])
+        and items.get("type") == "object"
+        and set(items.get("required", [])) == {"subject", "parts"}
+    )
+
+
 def require_range(section: dict, key: str, lo, hi, require) -> None:
     v = section.get(key)
     require(
@@ -281,6 +291,24 @@ def validate_object_region(s: dict, require, *, used: bool = True) -> None:
         (type(n) is int and 1 <= n <= 1000) or (not used and "max_consecutive_sampling_skips" not in o),
         "max_consecutive_sampling_skips must be an integer in [1, 1000]",
     )
+    # Added in T015 (minimum in T015-fix); a v1 run copied from an older config does not need them.
+    if used or any(key in o for key in ROTATION_ERROR_KEYS):
+        d, f, m = (o.get(key) for key in ROTATION_ERROR_KEYS)
+        require(
+            type(d) in (int, float) and 0 < d <= 180,
+            "object_region.rotation_max_error_degrees must be in (0, 180]",
+        )
+        require(
+            type(f) in (int, float) and 0 <= f <= 1,
+            "object_region.rotation_max_error_fraction must be in [0, 1]",
+        )
+        require(
+            type(m) in (int, float) and 0 < m <= 180,
+            "object_region.rotation_min_executed_degrees must be in (0, 180]",
+        )
+
+
+ROTATION_ERROR_KEYS = ("rotation_max_error_degrees", "rotation_max_error_fraction", "rotation_min_executed_degrees")
 
 
 TEXT_PART_KEYS = ("text_parts", "text_part_forms", "min_text_part_score", "text_part_containment")

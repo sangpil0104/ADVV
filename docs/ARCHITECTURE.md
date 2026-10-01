@@ -28,7 +28,7 @@ MVP 코드는 아래 구조로 구현했다. CPU 및 실제 Qwen 검증을 마�
 
 ```text
 원본 ingest/snapshot → 로컬 Qwen source profile 고정
-[object_region_v2일 때] proposals.json이 없는 원본마다: Qwen worker 종료 → SAM 3 proposal worker(첫 선택 GPU, profile subjects·parts 전달)
+[object_region_v2일 때] proposals.json이 없는 원본마다: Qwen worker 종료 → SAM 3 proposal worker(첫 선택 GPU, profile subjects·subject별 parts(v4) 전달, entity마다 자기 subject 부위만 질의)
     → raw receipt → CPU build/write proposals.json (기술 오류가 재시도 후에도 남으면 region_proposals_missing 오류)
     → 모든 원본 처리 후 proposal worker 종료
     proposals/<source_id>/ 로드·검증·hash 고정 → 영역 없는 원본은 source_no_region 보류
@@ -61,7 +61,7 @@ coordinator는 torch를 import하지 않는다. worker별 Python 실행 파일�
 | deformation | deformation | binary area, start/target displacement; 독립 scale 인자 없음 |
 | rotation | rotation | binary area, start/target, 별도 anchor |
 
-원본과 mask, `instruction.json`은 후보별 `backend_input/`에 저장한다. sampler는 feature grid로 반올림했을 때 항등 이동/범위 이탈도 거부한다. 이미지 크기는 공식 코드에서 16의 배수로 낮춰 bicubic resize하며, 실제 시작점은 upstream이 feature 영역의 centroid로 교체한다. 그래서 `source_point`는 두 sampler 모두 mask의 반올림 centroid이고, 이동·회전·항등 검사도 이 점으로 계산한다. `object_region_v2`의 비볼록 mask는 centroid가 mask 밖일 수 있으므로 윤곽 선택용 mask 내부 점 `region_select_point`를 따로 저장해 `instruction.json`의 `centroids[0]`으로 넘긴다(`centroids[1]`은 `target_point`). upstream centroid는 원본 mask를 feature grid로 bilinear(align_corners=False, antialias 없음) 축소한 뒤 `> 0.5`인 영역에서 계산된다. v2 sampler는 이 축소를 재현해 grid 영역이 비거나 그 centroid가 원본 centroid의 grid 점과 한 칸 넘게 다른 얇은 proposal을 제외하므로, 남은 proposal에서만 두 시작점이 grid 한 칸 이내다. v1 계획에는 이 검사를 적용하지 않는다(v1 계획은 변경 전과 같다). feature 영역의 bilinear soft mask를 NPY로 저장하고, nonzero 영역을 nearest로 원본 크기에 복원해 표시한다. 선택 영역과 확대 gradient mask를 혼동하지 않는다.
+원본과 mask, `instruction.json`은 후보별 `backend_input/`에 저장한다. sampler는 feature grid로 반올림했을 때 항등 이동/범위 이탈도 거부한다. 이미지 크기는 공식 코드에서 16의 배수로 낮춰 bicubic resize하며, 실제 시작점은 upstream이 feature 영역의 centroid로 교체한다. 그래서 `source_point`는 두 sampler 모두 mask의 반올림 centroid이고, 이동·회전·항등 검사도 이 점으로 계산한다. `object_region_v2`의 비볼록 mask는 centroid가 mask 밖일 수 있으므로 윤곽 선택용 mask 내부 점 `region_select_point`를 따로 저장해 `instruction.json`의 `centroids[0]`으로 넘긴다(`centroids[1]`은 `target_point`). upstream centroid는 원본 mask를 feature grid로 bilinear(align_corners=False, antialias 없음) 축소한 뒤 `> 0.5`인 영역에서 계산된다. v2 sampler는 이 축소를 재현해 grid 영역이 비거나 그 centroid가 원본 centroid의 grid 점과 한 칸 넘게 다른 얇은 proposal을 제외하므로, 남은 proposal에서만 두 시작점이 grid 한 칸 이내다. v1 계획에는 이 검사를 적용하지 않는다(v1 계획은 변경 전과 같다). upstream rotation 각도는 grid centroid 시작점·grid로 반올림한 목표점·anchor의 `atan2` 차이이므로, v2는 목표점을 실효 각도가 요청각과 같은 부호이고 `rotation_min_executed_degrees` 이상인 grid 칸 중 요청각에 가장 가까운 칸에 두고 허용 오차(`sampler.object_region.rotation_max_error_*`) 밖 각도는 다시 뽑는다(T015, T015-fix). v2의 grid 반올림은 upstream과 같은 float32 half-to-even이다(v1은 float64 유지). feature 영역의 bilinear soft mask를 NPY로 저장하고, nonzero 영역을 nearest로 원본 크기에 복원해 표시한다. 선택 영역과 확대 gradient mask를 혼동하지 않는다.
 
 Qwen은 `Qwen3_5ForConditionalGeneration`과 `AutoProcessor`로 실제 이미지 tensor를 전달한다. profile은 원본 한 장, physical은 후보 한 장, semantic은 원본·후보 두 장 순서다. bf16, eval/inference mode, thinking off, greedy decoding을 사용한다. chat template의 비활성화 표기를 확인하고 새 토큰만 decode한다. prompt·ordered image hashes·profile/hint·모델·processor·전처리·decoding 조건이 검증 identity에 포함된다. semantic prompt에는 profile의 `summary`·`must_preserve`·`uncertain`과 hint만 채우며(`subjects`·`parts` 제외), identity의 `prompt_hash`는 채운 뒤의 prompt hash다.
 

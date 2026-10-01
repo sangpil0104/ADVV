@@ -146,6 +146,7 @@
     {
       "requested_rotation_degrees": -11.172831809513795,
       "grid_rotation_degrees": -11.3099324740202,
+      "rotation_tolerance_degrees": 3.3518495428541386,
       "grid_radius_cells": 5.0,
       "anchor_method": "part_entity_contact",
       "contact_dilation_px": 3,
@@ -241,6 +242,7 @@
     {
       "requested_rotation_degrees": 11.166598547921204,
       "grid_rotation_degrees": 11.309932474020172,
+      "rotation_tolerance_degrees": 3.349979564376361,
       "grid_radius_cells": 5.0,
       "anchor_method": "part_entity_contact",
       "contact_dilation_px": 3,
@@ -328,7 +330,7 @@
       40
     ],
     [
-      30,
+      32,
       38
     ],
     [
@@ -341,7 +343,8 @@
     ],
     {
       "requested_rotation_degrees": 12.96770615535251,
-      "grid_rotation_degrees": 11.309932474020172,
+      "grid_rotation_degrees": 14.03624346792651,
+      "rotation_tolerance_degrees": 3.8903118466057527,
       "grid_radius_cells": 5.0,
       "anchor_method": "part_entity_contact",
       "contact_dilation_px": 3,
@@ -451,7 +454,7 @@
       40
     ],
     [
-      31,
+      32,
       45
     ],
     [
@@ -464,7 +467,8 @@
     ],
     {
       "requested_rotation_degrees": -25.067387214836387,
-      "grid_rotation_degrees": -21.801409486351815,
+      "grid_rotation_degrees": -26.565051177078004,
+      "rotation_tolerance_degrees": 7.520216164450916,
       "grid_radius_cells": 5.0,
       "anchor_method": "part_entity_contact",
       "contact_dilation_px": 3,

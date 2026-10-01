@@ -10,11 +10,18 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from .config import recipe_hash
+from .config import per_subject_parts, recipe_hash
 from .contracts import EditRequest, Source
 from .errors import BackendError, DataError, FatalBackendError, ResponseError, SamplingSkipped
 from .ingest import scan_sources, snapshot_sources
-from .proposals import build_proposals, load_proposals, profile_part_names, proposals_path, write_proposals
+from .proposals import (
+    build_proposals,
+    load_proposals,
+    profile_part_names,
+    proposals_path,
+    subject_parts_error,
+    write_proposals,
+)
 from .sampler import region_table, sample_edit, validate_plan
 from .storage import (
     atomic_image,
@@ -99,6 +106,13 @@ def semantic_context(profile_response: dict, preserve_hint) -> str:
     return json.dumps({"source_profile": criteria, "preserve_hint": preserve_hint}, ensure_ascii=False)
 
 
+def profile_parts_check(response: dict) -> None:
+    """Cross-field rule a JSON schema cannot state: v4 parts entries name distinct profile subjects."""
+    problem = subject_parts_error(response["parts"], response["subjects"])
+    if problem:
+        raise ResponseError(f"Invalid source profile: {problem}")
+
+
 class Pipeline:
     def __init__(self, run_dir: Path, backend, *, gpu_ids=None):
         self.root = run_dir.resolve()
@@ -136,7 +150,7 @@ class Pipeline:
         record["updated_at"] = now()
         atomic_json(self.root / f"records/{record['candidate_id']}.json", record)
 
-    def _complete(self, owner, check, images, prompt, schema, max_tokens, save, receipt_base):
+    def _complete(self, owner, check, images, prompt, schema, max_tokens, save, receipt_base, validate=None):
         checks = owner.setdefault("checks", {})
         entry = checks.setdefault(check, {"status": "pending", "response": None, "attempts": []})
         if entry["status"] in ("completed", "error", "not_run"):
@@ -180,6 +194,8 @@ class Pipeline:
                     atomic_json(path, {"ok": True, "result": {"text": text, "info": info}})
                 attempt.update(raw_completion=text, info=info)
                 parsed = parse_response(text, schema)
+                if validate:
+                    validate(parsed)
                 attempt.update(status="completed", elapsed_seconds=time.monotonic() - started)
                 entry.update(status="completed", response=parsed)
                 save()
@@ -230,6 +246,7 @@ class Pipeline:
                     self.cfg["source_profile"]["max_new_tokens"],
                     lambda: atomic_json(path, profile),
                     f"profiles/{source.source_id}_receipts",
+                    profile_parts_check if per_subject_parts(assets["profile_schema"]) else None,
                 )
                 profile["response"] = entry["response"]
                 profile["status"] = (

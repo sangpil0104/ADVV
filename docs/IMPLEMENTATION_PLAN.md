@@ -81,6 +81,8 @@
 - [x] RegionProposal worker: SAM 3 텍스트 → entity mask, 점 → part multimask → raw receipt → coordinator의 `build_proposals`/`write_proposals`, pipeline에서 profile 고정 후 원본마다 1회 호출하고 DragFlow 전에 종료(T009b). 가짜 SAM 3 패키지로 프로세스 계약·오류 경로 CPU 테스트.
 - [x] T013: part 포함 중복(`part_dedupe_containment` 0.95·`part_dedupe_area_ratio` 0.80, 미검증), part 면적 하한 0.05 → 0.02, text part가 남은 entity의 point part 억제(`suppress_point_parts_with_text`, 기본 on), 의미 VQA context를 profile `summary`·`must_preserve`·`uncertain`으로 축소, v3 prompt에 "증거를 담은 부위 제외" 추가, 로더 점 좌표 범위·raw 필드 누락 `DataError`·가짜 SAM 3 reset 강제(T012 QA M1, L1–L4).
 - [x] T014(사용자 결정): `text_part_containment` 0.90 → 0.85(T012 실측 굴착기 crawler track 0.865/0.888, entity 밖 바퀴 0.0). 포함 중복 0.95/0.80은 유지하며 "바지 다리" vs "바지+신발 다리" 같은 거의 같은 쌍이 남는 한계를 [설계 §8](REGION_SAMPLER.md#8-남은-결정)에 기록. T014 GPU9 재실행(5장)에서 crawler track이 text part로 채택(containment 0.865, rotation 가능)됐고 part 28→30, rotation 가능 24→26. 0.85–0.90 구간 표본은 3개뿐이라 entity 밖 객체 유입 가능성은 더 큰 표본으로 확인해야 한다.
+- [x] T015: profile `source_profile_v4`(subject별 `parts`, v3는 보존)와 v2 기본 profile 전환, entity별 자기 subject 부위만 텍스트 prompt, proposals.json·raw receipt `1.2`. rotation 목표를 grid 칸 단위로 골라 실효 각도를 요청각에 맞추고 허용 오차(`rotation_max_error_degrees` 3.0·`rotation_max_error_fraction` 0.30, 미검증) 밖 각도는 다시 뽑음. CPU 테스트만, GPU 미실행.
+- [x] T015-fix(QA M1·L1–L3): rotation 목표 칸은 실효각이 요청각과 같은 부호이고 `|실효각| ≥ rotation_min_executed_degrees`(2.0, 미검증)일 때만 인정(실효 0° 채택 차단), v2 grid 반올림을 upstream float32 `torch.round`와 일치(v1은 float64 유지), 해시 불가 parts subject를 오류 문구로 보고, config 문구 수정. CPU 테스트만, GPU 미실행.
 - [ ] ADVV adapter를 통한 실제 SAM 3 GPU 실행(`tests/test_sam3_integration.py`, `-m integration`)과 v2 `advv run`(DragFlow/Qwen 환경 필요, T005). T009d(GPU9)에서 T012 이전 adapter로, T012에서 텍스트 part adapter로 `assets/` 5장을 실행했다. T013 규칙은 T012 receipt를 CPU로 다시 build해 확인했다(adapter 변경 없음). v2 `advv run`과 실제 Qwen profile `parts`는 미실행.
 - [x] QA2 N1–N4: feature grid에서 사라지거나 시작점이 한 칸 넘게 달라지는 얇은 proposal 제외, rotation grid 반지름 하한(4칸)과 실효 각도 기록, v1 설정의 `max_consecutive_sampling_skips` 선택화, subjects 숫자 시작 단어 허용.
 - [x] `object_region_v2` sampler: operation별 granularity, part–entity 접촉 anchor, `source_no_region` 보류, EditRequest schema `1.3`(centroid 시작점 + 윤곽 선택점), 허용 이동 집합 직접 추출, `sampling_skipped`, 시각화 footer.
@@ -181,6 +183,20 @@ P5는 1차 파이프라인의 완료 조건이 아니다. Qwen 추가 학습이 
 - T012 receipt 5장을 CPU로 다시 build: part 수 27 → 28, rotation 가능 22 → 24(이미지별 표는 `_workspace/T013_implementer_report.md`). 포함 중복 0.95/0.80은 실측 쌍을 합치지 않았다.
 - 전체 CPU 테스트 **199개 통과**(신규 26, 통합 1개는 기본 제외), lint 통과. v1·v2 golden 불변. GPU·모델 추론·다운로드는 실행하지 않았다.
 - `src/advv/*.py`가 바뀌어 implementation hash가 달라졌으므로 이전 run은 `--resume`할 수 없다. T012에 쓴 proposals.json은 settings 불일치로 읽지 않으며, raw receipt(`1.1`)는 그대로 다시 build할 수 있다.
+
+## 2026-10-01 rotation 방향·최소 실효각과 float32 grid 반올림 (T015-fix)
+
+- T015 QA M1: 허용 오차 3.0°가 |요청각|(2–3°)보다 크면 반경 방향 칸(실효 0°)이 채택될 수 있었다(`front bumper`, 요청 −2.2° → 실효 0.0°). 사용자 결정(2026-10-01) "같은 방향 + 최소 2°"에 따라 목표 칸은 실효각이 요청각과 같은 부호이고 `|실효각| ≥ sampler.object_region.rotation_min_executed_degrees`(신규 키, 초기값 2.0, 요청각 하한과 별개 키)인 칸만 후보로 두고 그 뒤 허용 오차를 적용한다. 같은 계획은 실효 −4.76°가 된다. 30개 part × 0.05° 스윕에서 실효 0° 16건 → 0건, 반대 부호 0건, |실효| < 2° 434건 → 0건([설계 §3.3](REGION_SAMPLER.md#33-operation과-granularity)).
+- QA L1: v2의 grid 반올림을 upstream `torch.round(torch.tensor(x / W × g))`(float32, half-to-even)와 같게 `np.round(np.float32(...))`로 바꿨다. v1은 기존 float64 반올림을 유지한다. v1·v2 golden은 바뀌지 않았다. QA L2(해시 불가 subject → 오류 문구), L3(config 문구 "v4, or v3 with text_parts false")도 고쳤다.
+- 전체 CPU 테스트 **220개 통과**(신규 5, 통합 1개는 기본 제외), lint 통과. GPU·모델 추론·다운로드는 실행하지 않았다. `src/advv/*.py` 변경으로 implementation hash가 다시 바뀌었다.
+
+## 2026-10-01 subject별 parts와 rotation 실효 각도 (T015)
+
+- T011 `v2_pilot_001` 실측 두 가지를 고쳤다. (1) v3 `parts`가 모든 subject에 적용되어 `tree`에 `tree front bumper` 등 자동차 부위 prompt가 나가 39개가 포함 비율로 거부됐다. v3는 실제 run에 쓰였으므로 제자리 수정하지 않고 `source_profile_v4`(prompt·schema)를 새로 만들었다. `parts`는 `[{"subject", "parts"}]`이고, 미지·중복 subject는 profile 응답 단계에서 `ResponseError`다. `text_parts: true`인 v2는 config가 v4 형식을 요구한다(v3는 `text_parts: false`인 v2와 v1에서만). worker는 entity마다 자기 subject 부위만 묻고, 로더는 다른 subject의 부위 명사구를 거부한다. 의미 VQA context는 그대로다.
+- (2) 첫 후보 rotation의 요청 −10.51°가 upstream grid에서 −17.74°가 됐다(반지름 7.2칸, 4칸 규칙 통과). 원본 픽셀에서 돌린 끝점 (440, 542)이 grid (147, 181)로 반올림된 것이 주원인이다(시작점 교체 −13.84°, anchor 반올림 −14.40°, 끝점 반올림 −17.74°). 이제 회전한 grid 시작점 주변 3×3 칸 중 실효 각도가 요청각에 가장 가까운 칸을 고르고(같은 계획에서 −10.49°), 허용 오차 밖이면 각도를 다시 뽑으며, 허용 오차 안의 각도가 없는 part는 정적으로 제외한다. 계획에 `rotation_tolerance_degrees`를 추가로 기록한다. 같은 run의 rotation part 30개로 CPU 비교: 허용 오차 밖 8.8% → 0.04%, 오차 중앙값 1.48° → 0.34°.
+- v2 golden: rotation 계획 4개에 `rotation_tolerance_degrees`가 추가되고 2개의 목표점이 바뀌었다(실효 오차 1.66°→1.07°, 3.27°→1.50°). v1 golden 불변.
+- 전체 CPU 테스트 **215개 통과**(신규 16, 통합 1개는 기본 제외), lint 통과. GPU·모델 추론·다운로드는 실행하지 않았다.
+- `src/advv/*.py`가 바뀌어 implementation hash가 달라졌으므로 이전 run(`v2_pilot_001` 포함)은 `--resume`할 수 없다. proposals.json·raw receipt `1.1`은 읽지 않는다.
 
 ## 2026-09-30 실제 N=1 실행
 

@@ -52,7 +52,12 @@ sampler:
     contact_dilation_px: 3
     on_no_region: hold_source          # 기하 영역 fallback 없음 → source_no_region 보류
     max_consecutive_sampling_skips: 8  # 한 원본의 연속 sampling_skipped가 이 수에 닿으면 source_no_region 보류
-  # v2를 쓰려면 source_profile.prompt_path/response_schema도 v3(subjects 포함)로 바꾼다.
+    rotation_max_error_degrees: 3.0    # upstream이 grid에서 실행할 회전각과 요청각의 허용 오차는
+    rotation_max_error_fraction: 0.30  # max(이 각도, 이 비율 × |요청각|). 밖이면 그 각도를 다시 뽑음(미검증)
+    rotation_min_executed_degrees: 2.0 # 목표 칸은 실효각이 요청각과 같은 부호이고 |실효각| ≥ 이 값일 때만 인정
+                                       # (실효 0°·반대 방향 회전 차단). 요청각 하한 |요청각| ≥ 2°와는 별개 키
+  # v2를 쓰려면 source_profile.prompt_path/response_schema도 v4(subjects + subject별 parts)로 바꾼다.
+  # text_parts: false이면 v3(subjects만 사용)도 된다.
 
 execution:
   mode: shared_gpus_sequential
@@ -81,7 +86,7 @@ region_proposal:                       # object_region_v2 전용. 임계값은 �
   part_dedupe_containment: 0.95        # 작은 part가 큰 part 안에 든 비율이 이 값 이상이고
   part_dedupe_area_ratio: 0.80         # 면적비(작은/큰)도 이 값 이상이면 같은 부위로 보고 하나만 남김(미검증)
   part_points_per_entity: 16
-  text_parts: true                     # profile parts(부위 이름) 텍스트 prompt를 점 prompt와 병행
+  text_parts: true                     # profile v4 parts(subject별 부위 이름) 텍스트 prompt를 점 prompt와 병행
   text_part_forms: [subject_part, part]  # "<subject> <part>"와 "<part>" 단독. 하나만 써도 된다
   min_text_part_score: 0.50            # 텍스트 part 인스턴스 점수 하한(SAM 3 기본 0.5, 미검증)
   text_part_containment: 0.85          # 텍스트 part가 entity mask 안에 들어간 비율 하한

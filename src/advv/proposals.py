@@ -28,8 +28,8 @@ from .storage import (
     within,
 )
 
-SCHEMA_VERSION = "1.1"
-RAW_SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
+RAW_SCHEMA_VERSION = "1.2"
 PROPOSAL_BACKENDS = {"sam3", "grounding_dino_sam2.1"}
 FIXTURE_BACKEND = "fixture"
 PART_SOURCES = ("text", "point")
@@ -165,6 +165,31 @@ def part_seed(run_seed: int, source: Source, entity_index: int) -> int:
     return int(digest([run_seed, source.source_id, source.pixel_sha256, "part_points", entity_index])[:8], 16)
 
 
+def subject_parts_error(parts, subjects) -> str | None:
+    """Why parts is not a v4 per-subject part list ([{"subject", "parts"}, ...]) for subjects, or None.
+
+    Each entry names a distinct profile subject; a subject without an entry has no named parts.
+    """
+    if not isinstance(parts, list):
+        return "parts must be a list of {subject, parts}"
+    seen = set()
+    for entry in parts:
+        if not isinstance(entry, dict) or set(entry) != {"subject", "parts"}:
+            return "each parts entry must be {subject, parts}"
+        if not isinstance(entry["subject"], str) or entry["subject"] not in subjects or entry["subject"] in seen:
+            return f"parts entry subject {entry['subject']!r} is not a distinct profile subject"
+        names = entry["parts"]
+        if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
+            return f"parts of {entry['subject']!r} must be non-empty strings"
+        seen.add(entry["subject"])
+    return None
+
+
+def subject_parts(parts, subject: str) -> list[str]:
+    """Part names a v4 per-subject part list gives one subject (none without an entry)."""
+    return next((list(entry["parts"]) for entry in parts if entry["subject"] == subject), [])
+
+
 def text_part_phrases(subject: str, parts, forms) -> list[str]:
     """Text prompts for named parts of one entity, in parts order then form order, without repeats."""
     phrases = []
@@ -216,8 +241,9 @@ def collect_raw(predictor, phrases, parts, settings: dict, seed_for) -> dict:
     and seeded points inside it -> parts.
 
     predictor.text(phrase) yields (mask, score, box); predictor.point([x, y]) yields (mask, predicted_iou)
-    per multimask output. A text-part instance is offered to every entity with its containment (share of
-    the instance inside the cleaned entity mask). Masks that build_proposals rejects before reading them
+    per multimask output. parts is the per-subject part list: an entity is asked only for the parts of its
+    own phrase. A text-part instance is offered to every entity that asked for the phrase, with its
+    containment (share of the instance inside the cleaned entity mask). Masks that build_proposals rejects before reading them
     (score or containment below the setting) are dropped here; their scores stay in the receipt.
     """
     entities = []
@@ -232,7 +258,8 @@ def collect_raw(predictor, phrases, parts, settings: dict, seed_for) -> dict:
         cleaned = clean_mask(entity["mask"])
         if not cleaned.any():
             continue
-        for phrase in text_part_phrases(entity["phrase"], text_parts, settings["text_part_forms"]):
+        names = subject_parts(text_parts, entity["phrase"])
+        for phrase in text_part_phrases(entity["phrase"], names, settings["text_part_forms"]):
             if phrase not in answers:
                 answers[phrase] = predictor.text(phrase)
             for k, (mask, score, box) in enumerate(answers[phrase]):
@@ -351,7 +378,7 @@ def _part_order(parts: list) -> list[int]:
 def build_proposals(size: tuple[int, int], raw: dict, settings: dict) -> dict:
     """Clean, filter and deduplicate raw worker masks; deterministic for the same input.
 
-    raw = {"phrases": [...], "parts": [...], "entities": [{"phrase", "score", "mask",
+    raw = {"phrases": [...], "parts": [{"subject", "parts"}, ...], "entities": [{"phrase", "score", "mask",
            "parts": [{"source": "text"|"point", "score", "mask", "phrase"?, "containment"?}]}]}
     Rejections of text parts are counted under "text_part_*", point parts under "part_*". Parts are kept
     greedily in _part_order, so of two duplicates (IoU or nested) the earlier one stays. With
@@ -510,7 +537,7 @@ def write_proposals(
 
 
 def profile_part_names(profile: dict, settings: dict) -> list:
-    """Part names the worker was given: the frozen profile parts when text parts are on, else none."""
+    """Per-subject part names the worker was given: the frozen profile parts when text parts are on, else none."""
     return list(profile["response"].get("parts", [])) if settings["text_parts"] else []
 
 
@@ -596,6 +623,8 @@ def load_proposals(
         isinstance(part_names, list) and part_names == profile_part_names(profile, settings),
         "parts differ from the frozen source profile",
     )
+    problem = subject_parts_error(part_names, subjects)
+    require(problem is None, str(problem))
     entities = data.get("entities")
     require(isinstance(entities, list), "entities must be a list")
     require(data.get("status") == ("ready" if entities else "no_region"), "status disagrees with entities")
@@ -659,7 +688,9 @@ def load_proposals(
         require(entity.get("phrase") in phrases, f"{eid}: phrase not in phrases")
         require(isinstance(entity.get("parts"), list), f"{eid}: parts must be a list")
         kept_parts = []
-        named = text_part_phrases(entity.get("phrase"), part_names, settings["text_part_forms"])
+        named = text_part_phrases(
+            entity["phrase"], subject_parts(part_names, entity["phrase"]), settings["text_part_forms"]
+        )
         sources = []
         for p_index, part in enumerate(entity["parts"]):
             pid = f"part_{e_index:03d}_{p_index:03d}"
