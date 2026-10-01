@@ -4,6 +4,7 @@ import html
 from collections import Counter
 from pathlib import Path
 
+from .backends.dragflow_speedups import parse_speedups, speedup_record
 from .errors import DataError
 from .human_review import PASS
 from .human_review import enabled as human_review_enabled
@@ -16,6 +17,16 @@ def records_for(run_dir):
     return sorted([read_json(p) for p in (run_dir / "records").glob("*.json")], key=lambda r: r["sequence"])
 
 
+def export_speedups(record: dict, configured: dict[str, bool]) -> dict:
+    """Per-row execution-path summary; the candidate's own generation_info wins over the run config."""
+    info = (record.get("generation_info") or {}).get("speedups") or speedup_record(configured)
+    return {
+        "official_execution_path": info["official_execution_path"],
+        "enabled": info["enabled"],
+        "tf32": "tf32" in info["enabled"],
+    }
+
+
 def export_run(run_dir: Path) -> Path:
     import json
 
@@ -23,7 +34,9 @@ def export_run(run_dir: Path) -> Path:
     if manifest["backend"] != "dragflow+qwen_local":
         raise DataError("Production export refuses fake or unrecognized backends")
     sources = {s["source_id"]: s for s in read_json(run_dir / "sources.json")}
-    review = human_review_enabled(read_json(run_dir / "config.json"))
+    cfg = read_json(run_dir / "config.json")
+    review = human_review_enabled(cfg)
+    configured = parse_speedups(cfg["generator"].get("speedups"))
     seen = {s["pixel_sha256"] for s in sources.values()}
     rows = []
     for r in records_for(run_dir):
@@ -64,6 +77,7 @@ def export_run(run_dir: Path) -> Path:
                 "pixel_sha256": pixels,
                 "file_sha256": r["file_sha256"],
                 "backend": r["backend"],
+                "generator_speedups": export_speedups(r, configured),
                 "record_path": f"records/{r['candidate_id']}.json",
                 "human_review": r.get("human_review"),
                 "visualization_artifacts": r.get("visualization", {}).get("artifacts", {}),
@@ -113,6 +127,7 @@ def report_run(run_dir: Path, *, final_status=None) -> Path:
         "semantic_no": semantic_no,
         "duplicates": sum(r.get("export_status") == "duplicate" for r in records),
         "human_review": {"enabled": review, **(human_summary(records) if review else {})},
+        "generator_speedups": speedup_record(parse_speedups(cfg["generator"].get("speedups"))),
         "acceptance_rate": accepted / len(records) if records else None,
         "per_source": per_source,
         "region_proposals": state.get("region_proposals"),
@@ -156,6 +171,8 @@ def report_run(run_dir: Path, *, final_status=None) -> Path:
         "",
         f"Status: **{state['status']}** | Backend: `{result['backend']}`",
         "",
+        speedup_line(result["generator_speedups"]),
+        "",
         f"Accepted: **{accepted}/{result['target']}** | Attempts: {len(records)} | Duplicates: {result['duplicates']}",
         "",
         (
@@ -184,3 +201,12 @@ def report_run(run_dir: Path, *, final_status=None) -> Path:
     path = run_dir / "report.md"
     atomic_bytes(path, ("\n".join(lines) + "\n").encode())
     return path
+
+
+def speedup_line(record: dict) -> str:
+    if record["official_execution_path"]:
+        return "DragFlow execution: official path (no speedup patches)."
+    line = "DragFlow execution: **modified** by speedups " + ", ".join(f"`{k}`" for k in record["enabled"]) + "."
+    if record["precision_variants"]:
+        line += " Precision variant (not the official fp32 recipe): " + ", ".join(record["precision_variants"]) + "."
+    return line

@@ -184,6 +184,27 @@ P5는 1차 파이프라인의 완료 조건이 아니다. Qwen 추가 학습이 
 - 전체 CPU 테스트 **199개 통과**(신규 26, 통합 1개는 기본 제외), lint 통과. v1·v2 golden 불변. GPU·모델 추론·다운로드는 실행하지 않았다.
 - `src/advv/*.py`가 바뀌어 implementation hash가 달라졌으므로 이전 run은 `--resume`할 수 없다. T012에 쓴 proposals.json은 settings 불일치로 읽지 않으며, raw receipt(`1.1`)는 그대로 다시 build할 수 있다.
 
+## 2026-10-01 측정 스크립트 판정·안전 정리와 export 기록 (T017-fix, GPU 미측정)
+
+- QA M1: `check_dragflow_equivalence.py`가 arm 상태를 `completed`·`oom`·`error`로 나누고 완료된 arm만 비교한다. 종료 코드 2는 "완료된 결과 동일 arm이 허용오차 밖"일 때만 쓰고, OOM·오류 arm은 `incomplete_arms`와 종료 코드 3, 기준 미완료는 4, 인자·입력 오류(argparse 포함)는 1이다. `control_baseline`은 판정하지 않고 잡음 바닥(`noise_floor`, 지표별 최대 상대차)으로 기록하며, 결과 동일 arm 허용오차는 지표별 `max(rtol 1e-5, 10 × noise_floor)`다(`--rtol`, `--noise-multiplier`). tf32 arm은 진단 기준만 기록하고 종료 코드에 쓰지 않는다.
+- QA L1: harness round = drag K-loop operation 한 번. `--rounds`는 `max_dragging_num`(공식 50, INTENSIFY 전) 이하만 받고, `use_grad_mask`도 시작 전에 확인한다. arm마다 upstream `conf`(INTENSIFY의 `lr` 변경 등)를 원래 값으로 되돌린다.
+- QA L2: arm의 설치 실패·비-OOM 예외도 `status: error`와 예외 문자열로 기록하고 다음 arm을 계속한다. `equivalence.json`은 arm마다 다시 써서(`finished`, `pending_arms`) 기준 실패·중단에도 결과가 남는다. 출력 디렉터리는 후보·round 검증 뒤에 만든다. `profile_dragflow.py`도 OOM·오류 시 JSON을 쓰고 3으로 끝난다.
+- QA L3: 출력 경로를 허용 목록으로 바꿨다. 프로젝트 안은 `_workspace/` 아래만, 프로젝트 밖은 `--allow-external-out`이 있을 때만 허용하고 원본 run 안은 거부한다.
+- QA L4: `CUDA_VISIBLE_DEVICES`가 없으면 스크립트가 설정하지 않고 종료한다. 명령에 `--gpus`와 같은 값으로 적어야 gpu-guard 훅이 GPU 선택을 본다.
+- QA L5: `exports/images.jsonl` 행에 `generator_speedups`(`official_execution_path`, `enabled`, `tf32`)를 추가했다. 후보 `generation_info.speedups`가 있으면 그것, 없으면 run 설정에서 만든다. 행 `schema_version`은 추가 필드라 `1.1` 그대로다.
+- QA L6: v2 `rotation_target`의 anchor grid 점도 float32 반올림으로 통일했다. v2에서만 쓰이므로 v1은 불변이고, v1·v2 golden도 바뀌지 않았다(960×720 등 golden 크기에서는 두 반올림이 같음).
+- 전체 CPU 테스트 **258개 통과**(신규 16, 통합 2개는 기본 제외), lint 통과. GPU·모델 로드·다운로드는 실행하지 않았다. `src/advv/*.py`(`reporting.py`, `sampler.py`)가 바뀌어 implementation hash가 다시 바뀌었다.
+
+## 2026-10-01 DragFlow 가속 플래그와 측정 도구 준비 (T017, GPU 미측정)
+
+- 사용자 결정(2026-10-01) "0+1+2 진행, GPU는 나중"에 따라 `generator.speedups` 다섯 플래그를 추가했다: 결과 동일 설계 4개(`skip_unused_single_blocks`, `disable_gradient_checkpointing`, `ip_adapter_on_transformer_device`, `light_reclaim_memory`)와 정밀도 변형 `tf32`. 기본은 전부 꺼짐이며 그때 wrapper는 upstream에 아무것도 덧씌우지 않는다. upstream 파일은 수정하지 않았다. 근거 줄 번호는 [아키텍처](ARCHITECTURE.md#dragflow-실행-가속-플래그-t017).
+- single block 생략 전제 재확인: F_drag의 noise prediction은 `dragger.py:355`에서 바로 삭제되고 loss·gradient·z 갱신·로그·다음 round 어디에도 single block 출력이 쓰이지 않는다. F_orig(no_grad)는 noise prediction을 쓰므로(326) 생략하지 않는다.
+- 기록: run `config.json`(다섯 키 전부 저장), 후보 `generation_info.speedups`, `report.json`의 `generator_speedups`와 `report.md` 첫머리. 이 키가 없는 이전 config는 전부 꺼짐으로 검증된다.
+- 측정 도구(작성만, GPU 미실행): `scripts/profile_dragflow.py`(0단계 시간 분포), `scripts/check_dragflow_equivalence.py`(1·2단계 동일성·속도), 공용 `scripts/dragflow_harness.py`. GPU 번호는 인자로만 받는다.
+- CPU 확인: 실제 upstream 모듈을 `.venv-dragflow`에서 CUDA 없이 import해 패치 대상 이름(`reclaim_memory` 4곳, `F`, Dragger 메서드, checkpointing API)과 실제 `FluxIPAttnProcessor`의 signature 보존을 확인했다(모델 로드 없음).
+- 전체 CPU 테스트 **242개 통과**(신규 22, 통합 2개는 기본 제외), lint 통과. `src/advv/*.py` 변경으로 implementation hash가 바뀌어 이전 run은 `--resume`할 수 없다.
+- 남은 것: GPU에서 0단계 profile → 1단계 동일성·속도 → 2단계 TF32 측정, 피크 메모리 확인(특히 checkpointing off + processor 이동), TF32의 전체 이미지 품질 비교.
+
 ## 2026-10-01 rotation 방향·최소 실효각과 float32 grid 반올림 (T015-fix)
 
 - T015 QA M1: 허용 오차 3.0°가 |요청각|(2–3°)보다 크면 반경 방향 칸(실효 0°)이 채택될 수 있었다(`front bumper`, 요청 −2.2° → 실효 0.0°). 사용자 결정(2026-10-01) "같은 방향 + 최소 2°"에 따라 목표 칸은 실효각이 요청각과 같은 부호이고 `|실효각| ≥ sampler.object_region.rotation_min_executed_degrees`(신규 키, 초기값 2.0, 요청각 하한과 별개 키)인 칸만 후보로 두고 그 뒤 허용 오차를 적용한다. 같은 계획은 실효 −4.76°가 된다. 30개 part × 0.05° 스윕에서 실효 0° 16건 → 0건, 반대 부호 0건, |실효| < 2° 434건 → 0건([설계 §3.3](REGION_SAMPLER.md#33-operation과-granularity)).

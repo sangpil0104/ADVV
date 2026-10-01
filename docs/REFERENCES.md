@@ -13,6 +13,17 @@
 - [모델 설정](https://github.com/Edennnnnnnnnn/DragFlow/blob/main/framework/config.yaml): `black-forest-labs/FLUX.1-dev`, InstantCharacter adapter 경로, SigLIP·DINOv2 encoder 설정 확인.
 - [환경 파일](https://github.com/Edennnnnnnnnn/DragFlow/blob/main/dependencies/dragflow.yaml): Python 3.10.16, torch 2.5.1, diffusers 0.32.2, transformers 4.48.0이 기재되어 있다. ADVV에서 검증한 lock은 아니다.
 
+## DragFlow 가속 조사 요약 (T016, 2026-10-01)
+
+조사 원문은 `_workspace/T016_researcher_dit_speedup.md`(로컬 작업 기록)이다. 아래 시간 비중은 T011 로그와 코드 루프에서 셈한 추정이며 profiler 측정 전이다.
+
+- 시간 구성(960×720, T011): no_grad forward 1회 약 16.4 s, drag round 약 29 s × 70(TRANSPORT 50 + INTENSIFY 20) ≈ 34분, inversion 약 5.5분, sampling 약 11분. round가 약 2/3다.
+- 병목 후보(코드로 확인, 지배 요인은 미측정): fp32 activation + quanto qint8 dequant 뒤 `torch.matmul`(fused kernel 없음), fp32라 FlashAttention 불가, IP-adapter processor의 attention 층마다 cuda:0↔cuda:1 왕복, KV hook의 pageable CPU↔GPU 복사, 호출마다 전 GPU를 동기화하는 `reclaim_memory`.
+- 최적화 없는 drag 논문은 모두 다른 생성기라 DragFlow를 대체할 수 없다: [LazyDrag](https://arxiv.org/abs/2509.12203)(MM-DiT, TTO 없음, runtime 수치 없음), [FastDrag](https://arxiv.org/abs/2405.15769)(SD1.5, 3.12 s/point vs DragDiffusion 21.54 s), [RegionDrag](https://arxiv.org/abs/2407.18247), [InstantDrag](https://arxiv.org/abs/2409.08857), [LightningDrag](https://arxiv.org/abs/2405.13722), [Inpaint4Drag](https://arxiv.org/abs/2509.04582), [DragNoise](https://arxiv.org/abs/2404.01050), [GoodDrag](https://arxiv.org/abs/2404.07206), [StableDrag](https://arxiv.org/abs/2403.04437), [FlowOpt](https://arxiv.org/abs/2510.22010). DragFlow 논문([arXiv 2510.02253](https://arxiv.org/abs/2510.02253))에는 runtime 표가 없다. 논문은 INTENSIFY lr 1200, 코드는 1000이며 ADVV는 코드를 따른다.
+- 추론 캐싱([TeaCache](https://arxiv.org/abs/2411.19108), [ToCa](https://arxiv.org/abs/2410.05317), [FORA](https://arxiv.org/abs/2407.01425), [Δ-DiT](https://arxiv.org/abs/2406.01125), [FasterCache](https://arxiv.org/abs/2410.19355))은 inversion KV capture와 충돌하거나 sampling 비중이 작아 후순위다. [FireFlow](https://arxiv.org/abs/2412.07517)는 이미 쓰고 있다.
+- 정밀도: [PyTorch 2.5 TF32 설명](https://docs.pytorch.org/docs/2.5/notes/cuda.html)(matmul 기본 off, cuDNN 기본 on), [SDPA](https://docs.pytorch.org/docs/2.5/generated/torch.nn.functional.scaled_dot_product_attention.html)와 [FlashAttention](https://github.com/Dao-AILab/flash-attention)(fp16/bf16 전용), [quanto + diffusers](https://huggingface.co/blog/quanto-diffusers)(목적은 메모리, 지연은 비슷하거나 증가).
+- 사용자 결정(2026-10-01): 0단계 profiler, 1단계 결과 동일 패치 묶음, 2단계 TF32를 진행한다. bf16·quanto 제거·round 축소는 보류. 구현은 [아키텍처의 가속 플래그](ARCHITECTURE.md#dragflow-실행-가속-플래그-t017), 측정은 아직이다.
+
 ## Qwen
 
 - [Qwen3.5-4B 공식 모델 카드](https://huggingface.co/Qwen/Qwen3.5-4B): 이미지·텍스트 입력을 지원하는 post-trained checkpoint와 로컬 실행 자료, thinking 비활성화 방법을 확인했다. 이 프로젝트의 기본 모델이다.

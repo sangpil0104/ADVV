@@ -210,3 +210,20 @@ def test_grid_rounding_matches_upstream_float32():
     # Shifting 351 -> 350 stays on cell 116 upstream, so it is not a move (float64 would call it 115).
     dx, _, _ = valid_shifts([351, 100], ((-3, 3), (0, 0)), (1, 3), w, h)
     assert sorted(dx.tolist()) == [-3, -2, 3]  # 352 and 353 are cell 116 too
+
+
+def test_rotation_target_rounds_every_grid_point_in_float32(monkeypatch):
+    """T017 QA L6: the anchor grid point uses upstream float32 rounding like the start and target."""
+    from advv import sampler
+
+    calls = []
+
+    def spy(point, width, height, float32=False):
+        calls.append(float32)
+        return grid_point(point, width, height, float32)
+
+    monkeypatch.setattr(sampler, "grid_point", spy)
+    rotation_target(PILOT, PILOT_REQUESTED, *PILOT_SIZE)
+    assert calls and all(calls)
+    # Where the two roundings differ (1000 px wide, x = 350), the anchor now follows upstream's float32 cell.
+    assert grid_point([350, 0], 1000, 750) == [115, 0] and grid_point([350, 0], 1000, 750, True) == [116, 0]

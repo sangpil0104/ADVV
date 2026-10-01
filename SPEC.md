@@ -210,4 +210,6 @@ run에는 입력 snapshot·파일/픽셀 hash, 고정 SourceProfile, source별 a
 
 가중치·소스·환경을 고정해도 GPU·kernel 차이로 bitwise 재현성이 달라질 수 있다. GPU 변경 기록 없이 동일 환경 재현이라고 주장하지 않는다.
 
+DragFlow 실행 가속(`generator.speedups`)은 선택 사항이며 기본은 모두 꺼짐(공식 실행 경로)이다. 켠 플래그는 run `config.json`, 후보별 `generation_info.speedups`, report에 기록하고, export manifest(`exports/images.jsonl`) 각 행에도 `generator_speedups`(`official_execution_path`, `enabled`, `tf32`)로 남겨 manifest만 보고도 공식 경로 결과와 구분되게 한다. 결과 동일을 설계 근거로 둔 패치와 정밀도를 바꾸는 변형(`tf32`)을 구분해 기록하며, 변형을 켠 run을 공식 DragFlow 설정의 결과라고 보고하지 않는다. 가속을 위해 DragFlow를 다른 생성기로 바꾸지 않는다([아키텍처](docs/ARCHITECTURE.md#dragflow-실행-가속-플래그-t017)).
+
 MVP 완료는 실제 DragFlow와 실제 로컬 Qwen으로 N장의 고유한 두 검증 통과 이미지를 만들고 사용자 중단·재개·삭제를 검증한 상태다. 장비/가중치가 준비되지 않아 실행하지 못했다면 구현 완료와 통합 검증 대기를 구분한다. 후속 모델의 성능 개선은 MVP 완료 조건이 아니다.

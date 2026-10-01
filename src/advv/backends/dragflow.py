@@ -16,6 +16,7 @@ from ..contracts import EditRequest, Source
 from ..errors import BackendError, ConfigError
 from ..sampler import validate_plan
 from ..storage import atomic_bytes, atomic_image, atomic_json, file_hash, load_rgb, read_json, within
+from .dragflow_speedups import install_speedups, parse_speedups, speedup_record, upstream_modules
 
 ALLOWED_PARAMETERS = {
     "lr",
@@ -101,8 +102,12 @@ class DragFlow:
             show_step_images=None,
         )
         self.conf = conf
+        self.speedups = parse_speedups(cfg["generator"].get("speedups"))
         self.dragger = Dragger(conf, dtype=torch.float32)
         self.dragger.load_pipeline()
+        # Opt-in execution patches; all off keeps the official upstream path (dragflow_speedups.py).
+        modules = upstream_modules() if any(self.speedups.values()) else {}
+        self.installed = install_speedups(self.speedups, torch=torch, dragger=self.dragger, modules=modules)
         self.load_data = dashboard_utils.load_data
 
     def __call__(self, request):
@@ -185,6 +190,7 @@ class DragFlow:
                 "revision": self.cfg["generator"]["revision"],
                 "dtype": "float32",
                 "transformer_quantization": "quanto_qint8",
+                "speedups": speedup_record(self.speedups, torch),
                 "torch": torch.__version__,
                 "peak_vram_bytes": [
                     torch.cuda.max_memory_allocated(i) for i in range(torch.cuda.device_count())

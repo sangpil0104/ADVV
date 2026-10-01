@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 
+from .backends.dragflow_speedups import parse_speedups
 from .errors import ConfigError
 from .storage import digest
 
@@ -54,6 +55,8 @@ def load_config(path: Path, *, input_dir=None, target_count=None, gpus=None, hum
         cfg["execution"]["selected_gpu_ids"] = parse_gpus(gpus)
     if human_review is not None:
         cfg["human_review"] = {**(cfg.get("human_review") or {}), "enabled": human_review}
+    # Stored in full so every new run's config.json states which DragFlow speedups were on (default none).
+    cfg["generator"]["speedups"] = parse_speedups(cfg["generator"].get("speedups"))
     cfg["_config_path"] = str(path)
     assets = {}
     for name, section, key in (
@@ -186,6 +189,7 @@ def validate_config(cfg: dict) -> None:
         v["backend"] == "qwen_multimodal_local" and cfg["generator"]["backend"] == "dragflow",
         "Real backend IDs required",
     )
+    parse_speedups(cfg["generator"].get("speedups"))
     require(v["local_files_only"] and not v["fine_tune"], "Local pretrained inference required")
     require(
         v["enable_thinking"] is False and v["do_sample"] is False and v["batch_size"] == 1,

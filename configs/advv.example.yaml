@@ -102,6 +102,13 @@ generator:
   upstream_config: null
   weights_lock: null                   # FLUX/adapter/encoder의 모든 revision
   parameters: {}
+  speedups:                            # 실행 가속 패치. 전부 false = 공식 DragFlow 경로 그대로 (기본)
+    skip_unused_single_blocks: false   # 결과 동일 설계: drag round에서 loss가 안 쓰는 single block 38개 생략
+    disable_gradient_checkpointing: false  # 결과 동일 설계: 재계산 제거, 메모리 증가
+    ip_adapter_on_transformer_device: false  # 결과 동일 설계: IP attn processor를 cuda:0으로 (약 +5.7 GB 추정)
+    light_reclaim_memory: false        # 결과 동일 설계: 매번 전 GPU sync·empty_cache·gc 생략
+    tf32: false                        # 정밀도 변형(결과 달라짐): fp32 matmul을 TF32로
+  # 모두 GPU 미측정(T017). 켠 플래그는 generation_info·config.json·report에 기록된다. docs/ARCHITECTURE.md 참조
 
 verifier:
   backend: qwen_multimodal_local

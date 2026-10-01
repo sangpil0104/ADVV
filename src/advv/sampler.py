@@ -259,7 +259,7 @@ def rotation_target(option: dict, degrees: float, width: int, height: int, min_e
     |executed| >= min_executed: with a tolerance above |degrees| a radial cell (0 deg) or a cell turning the
     other way could otherwise be the closest (T015 QA M1). None when no neighbouring cell is a valid target.
     """
-    a = grid_point(option["anchor"], width, height)
+    a = grid_point(option["anchor"], width, height, True)
     b = option["grid_start"]
     radians = math.radians(degrees)
     ideal = _rotated(b, a, radians)
